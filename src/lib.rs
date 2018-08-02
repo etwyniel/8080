@@ -11,8 +11,8 @@ struct Flags {
     s: bool,
     p: bool,
     cy: bool,
-    ac: bool,
-    pad: i32
+    ac: bool
+    //pad: i32
 }
 
 pub struct State8080 {
@@ -117,19 +117,19 @@ impl State8080 {
      }
 
      fn and(&mut self, val: u8) {
-         self.a = self.a & val;
+         self.a &= val;
          let temp = self.a;
          self.set_r(temp);
      }
 
      fn xor(&mut self, val: u8) {
-         self.a = self.a ^ val;
+         self.a ^= val;
          let temp = self.a;
          self.set_r(temp);
      }
 
      fn or(&mut self, val: u8) {
-         self.a = self.a | val;
+         self.a |= val;
          let temp = self.a;
          self.set_r(temp);
      }
@@ -451,9 +451,8 @@ fn disassemble8080_op(codebuffer: &[u8], pc: usize) -> usize {
 
 pub fn emulate8080(state: &mut State8080) {
     let opcode = state.memory[state.pc];
-    let mut opbytes = 1;
     let mut ans: u16;
-    let mut ans8: u8;
+    let ans8: u8;
     let ans32: u32;
     let addr: usize;
     match opcode {
@@ -953,11 +952,11 @@ pub fn emulate8080(state: &mut State8080) {
         0xf4 => {if !state.fl.s {ans = state.word(); state.call(ans)}}, // CP
         0xf5 => { // PUSH PWS
             ans = u16::from(state.a) << 8;
-            if state.fl.s {ans = ans | 0x80};
-            if state.fl.z {ans = ans | 0x40};
-            if state.fl.ac {ans = ans | 0x10};
-            if state.fl.p {ans = ans | 0x04};
-            if state.fl.cy {ans = ans | 0x01};
+            if state.fl.s {ans |= 0x80};
+            if state.fl.z {ans |= 0x40};
+            if state.fl.ac {ans |= 0x10};
+            if state.fl.p {ans |= 0x04};
+            if state.fl.cy {ans |= 0x01};
             state.push(ans);
         },
         0xf6 => {ans8 = state.byte1(); state.or(ans8)}, // ANI #$BYTE
