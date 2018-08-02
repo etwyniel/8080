@@ -1,3 +1,6 @@
+use std::fs::File;
+use std::io::prelude::*;
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -11,8 +14,7 @@ struct Flags {
     s: bool,
     p: bool,
     cy: bool,
-    ac: bool
-    //pad: i32
+    ac: bool, //pad: i32
 }
 
 pub struct State8080 {
@@ -27,25 +29,56 @@ pub struct State8080 {
     pc: usize,
     memory: Vec<u8>,
     fl: Flags,
-    int_enable: u8
+    int_enable: u8,
 }
 
 impl State8080 {
+    pub fn new() -> State8080 {
+        State8080 {
+            a: 0,
+            b: 0,
+            c: 0,
+            d: 0,
+            e: 0,
+            h: 0,
+            l: 0,
+            sp: 0,
+            pc: 0,
+            memory: vec![0; 0x10000],
+            fl: Flags {
+                z: false,
+                s: false,
+                p: false,
+                cy: false,
+                ac: false,
+            },
+            int_enable: 0,
+        }
+    }
+
+    pub fn read_file_in_memory_at(
+        &mut self,
+        filename: &str,
+        offset: usize,
+    ) -> std::io::Result<usize> {
+        File::open(filename)?.read(&mut self.memory[offset..])
+    }
+
     fn unimplemented_instruction(&mut self) {
         println!("Error: unimplemented instruction");
         std::process::exit(1);
     }
 
     fn bc(&self) -> usize {
-        usize::from((self.b << 8) | self.c)
+        (usize::from(self.b) << 8) | usize::from(self.c)
     }
 
     fn de(&self) -> usize {
-        usize::from((self.d << 8) | self.e)
+        (usize::from(self.d) << 8) | usize::from(self.e)
     }
 
     fn hl(&self) -> usize {
-        usize::from((self.h << 8) | self.l)
+        (usize::from(self.h) << 8) | usize::from(self.l)
     }
 
     fn at_bc(&self) -> u8 {
@@ -64,102 +97,106 @@ impl State8080 {
     }
 
     fn byte1(&self) -> u8 {
-        self.memory[self.pc + 1]
+        self.memory[self.pc]
     }
 
     fn byte2(&self) -> u8 {
-        self.memory[self.pc + 2]
+        self.memory[self.pc + 1]
     }
 
-     fn word(&self) -> u16 {
-         self.word_at(self.pc + 1)
-     }
+    fn word(&self) -> u16 {
+        self.word_at(self.pc)
+    }
 
-     fn word_at(&self, addr: usize) -> u16 {
-         (u16::from(self.memory[addr + 1]) << 8) | u16::from(self.memory[addr])
-     }
+    fn word_at(&self, addr: usize) -> u16 {
+        (u16::from(self.memory[addr + 1]) << 8) | u16::from(self.memory[addr])
+    }
 
-     fn set_r(&mut self, res: u8) {
+    fn set_r(&mut self, res: u8) {
         self.fl.z = res == 0;
         self.fl.s = (res & 0x7f) != 0;
         self.fl.p = (res & 1) == 0;
-     }
+    }
 
-     fn set_flags(&mut self, res: u16) {
-         self.fl.cy = res > 0xff;
-         self.set_r(res as u8);
-     }
+    fn set_flags(&mut self, res: u16) {
+        self.fl.cy = res > 0xff;
+        self.set_r(res as u8);
+    }
 
-     fn add(&mut self, val: u8) {
+    fn add(&mut self, val: u8) {
         let ans = u16::from(self.a) + u16::from(val);
         self.set_flags(ans);
         self.a = ans as u8;
-     }
+    }
 
-     fn adc(&mut self, val: u8) {
-         let mut cy = if self.fl.cy {1u8} else {0u8};
-         self.add(val);
-         if self.fl.cy {cy += 1};
-         self.add(cy);
-     }
+    fn adc(&mut self, val: u8) {
+        let mut cy = if self.fl.cy { 1u8 } else { 0u8 };
+        self.add(val);
+        if self.fl.cy {
+            cy += 1
+        };
+        self.add(cy);
+    }
 
-     fn sub(&mut self, val: u8) {
+    fn sub(&mut self, val: u8) {
         let ans = u16::from(self.a) - u16::from(val);
         self.set_flags(ans);
         self.a = ans as u8;
-     }
+    }
 
-     fn sbb(&mut self, val: u8) {
-         let mut cy = if self.fl.cy {1u8} else {0u8};
-         self.sub(val);
-         if self.fl.cy {cy += 1};
-         self.sub(cy);
-     }
+    fn sbb(&mut self, val: u8) {
+        let mut cy = if self.fl.cy { 1u8 } else { 0u8 };
+        self.sub(val);
+        if self.fl.cy {
+            cy += 1
+        };
+        self.sub(cy);
+    }
 
-     fn and(&mut self, val: u8) {
-         self.a &= val;
-         let temp = self.a;
-         self.set_r(temp);
-     }
+    fn and(&mut self, val: u8) {
+        self.a &= val;
+        let temp = self.a;
+        self.set_r(temp);
+    }
 
-     fn xor(&mut self, val: u8) {
-         self.a ^= val;
-         let temp = self.a;
-         self.set_r(temp);
-     }
+    fn xor(&mut self, val: u8) {
+        self.a ^= val;
+        let temp = self.a;
+        self.set_r(temp);
+    }
 
-     fn or(&mut self, val: u8) {
-         self.a |= val;
-         let temp = self.a;
-         self.set_r(temp);
-     }
+    fn or(&mut self, val: u8) {
+        self.a |= val;
+        let temp = self.a;
+        self.set_r(temp);
+    }
 
-     fn cmp(&mut self, val: u8) {
+    fn cmp(&mut self, val: u8) {
         let ans = u16::from(self.a) - u16::from(val);
         self.set_flags(ans);
-     }
+    }
 
-     fn pop(&mut self) -> u16 {
-         let r = (u16::from(self.memory[self.sp+1]) << 8) | u16::from(self.memory[self.sp]);
-         self.sp += 2;
-         r
-     }
+    fn pop(&mut self) -> u16 {
+        let r = (u16::from(self.memory[self.sp + 1]) << 8) | u16::from(self.memory[self.sp]);
+        self.sp += 2;
+        r
+    }
 
-     fn push(&mut self, val: u16) {
-         self.memory[self.sp] = (val & 0xff) as u8;
-         self.memory[self.sp + 1] = (val >> 8) as u8;
-         self.sp -= 2;
-     }
+    fn push(&mut self, val: u16) {
+        self.memory[self.sp] = (val & 0xff) as u8;
+        self.memory[self.sp + 1] = (val >> 8) as u8;
+        self.sp -= 2;
+    }
 
-     fn ret(&mut self) {
-         self.pc = usize::from(self.pop());
-     }
+    fn ret(&mut self) {
+        self.pc = usize::from(self.pop());
+    }
 
-     fn call(&mut self, addr: u16) {
-         let pc = self.pc as u16;
-         self.push(pc);
-         self.pc = usize::from(addr);
-     }
+    fn call(&mut self, addr: u16) {
+        let pc = self.pc as u16;
+        self.push(pc);
+        self.pc = usize::from(addr);
+    }
 }
 
 fn disassemble8080_op(codebuffer: &[u8], pc: usize) -> usize {
@@ -168,12 +205,18 @@ fn disassemble8080_op(codebuffer: &[u8], pc: usize) -> usize {
     print!("{:04x} ", pc);
     match code[0] {
         0x00 => print!("NOP"),
-        0x01 => {print!("LXI    B,#${:02x}{:02x}", code[2], code[1]); opbytes = 3;},
+        0x01 => {
+            print!("LXI    B,#${:02x}{:02x}", code[2], code[1]);
+            opbytes = 3;
+        }
         0x02 => print!("STAX   B"),
         0x03 => print!("INX   B"),
         0x04 => print!("INR   B"),
         0x05 => print!("DCR   B"),
-        0x06 => {print!("MVI    B,#${:02x}", code[1]); opbytes = 2;},
+        0x06 => {
+            print!("MVI    B,#${:02x}", code[1]);
+            opbytes = 2;
+        }
         0x07 => print!("RLC"),
 
         0x08 => print!("NOP"),
@@ -182,16 +225,25 @@ fn disassemble8080_op(codebuffer: &[u8], pc: usize) -> usize {
         0x0b => print!("DCX   C"),
         0x0c => print!("INR   C"),
         0x0d => print!("DCR   C"),
-        0x0e => {print!("MVI    C,#${:02x}", code[1]); opbytes = 2;},
+        0x0e => {
+            print!("MVI    C,#${:02x}", code[1]);
+            opbytes = 2;
+        }
         0x0f => print!("RRC"),
 
         0x10 => print!("NOP"),
-        0x11 => {print!("LXI    B,#${:02x}{:02x}", code[2], code[1]); opbytes = 3;},
+        0x11 => {
+            print!("LXI    B,#${:02x}{:02x}", code[2], code[1]);
+            opbytes = 3;
+        }
         0x12 => print!("STAX   B"),
         0x13 => print!("INX   D"),
         0x14 => print!("INR   D"),
         0x15 => print!("DCR   D"),
-        0x16 => {print!("MVI    B,#${:02x}", code[1]); opbytes = 2;},
+        0x16 => {
+            print!("MVI    B,#${:02x}", code[1]);
+            opbytes = 2;
+        }
         0x17 => print!("RLC"),
 
         0x18 => print!("NOP"),
@@ -200,43 +252,76 @@ fn disassemble8080_op(codebuffer: &[u8], pc: usize) -> usize {
         0x1b => print!("DCX   D"),
         0x1c => print!("INR   E"),
         0x1d => print!("DCR   E"),
-        0x1e => {print!("MVI    E,#${:02x}", code[1]); opbytes = 2;},
+        0x1e => {
+            print!("MVI    E,#${:02x}", code[1]);
+            opbytes = 2;
+        }
         0x1f => print!("RAR"),
 
         0x20 => print!("NOP"),
-        0x21 => {print!("LXI    H,#${:02x}{:02x}", code[2], code[1]); opbytes = 3;},
-        0x22 => {print!("SHLD   ${:02x}{:02x}", code[2], code[1]); opbytes = 3;},
+        0x21 => {
+            print!("LXI    H,#${:02x}{:02x}", code[2], code[1]);
+            opbytes = 3;
+        }
+        0x22 => {
+            print!("SHLD   ${:02x}{:02x}", code[2], code[1]);
+            opbytes = 3;
+        }
         0x23 => print!("INX   H"),
         0x24 => print!("INR   H"),
         0x25 => print!("DCR   H"),
-        0x26 => {print!("MVI    H,#${:02x}", code[1]); opbytes = 2;},
+        0x26 => {
+            print!("MVI    H,#${:02x}", code[1]);
+            opbytes = 2;
+        }
         0x27 => print!("DAA"),
 
         0x28 => print!("NOP"),
         0x29 => print!("DAD   H"),
-        0x2a => {print!("LHLD   ${:02x}{:02x}", code[2], code[1]); opbytes = 3;},
+        0x2a => {
+            print!("LHLD   ${:02x}{:02x}", code[2], code[1]);
+            opbytes = 3;
+        }
         0x2b => print!("DCX    H"),
         0x2c => print!("INR   L"),
         0x2d => print!("DCR   L"),
-        0x2e => {print!("MVI    L,#${:02x}", code[1]); opbytes = 2;},
+        0x2e => {
+            print!("MVI    L,#${:02x}", code[1]);
+            opbytes = 2;
+        }
         0x2f => print!("CMA"),
 
         0x30 => print!("NOP"),
-        0x31 => {print!("LXI   SP,#${:02x}{:02x}", code[2], code[1]); opbytes = 3;},
-        0x32 => {print!("SHL    ${:02x}{:02x}", code[2], code[1]); opbytes = 3;},
+        0x31 => {
+            print!("LXI   SP,#${:02x}{:02x}", code[2], code[1]);
+            opbytes = 3;
+        }
+        0x32 => {
+            print!("SHL    ${:02x}{:02x}", code[2], code[1]);
+            opbytes = 3;
+        }
         0x33 => print!("INX  SP"),
         0x34 => print!("INR   M"),
         0x35 => print!("DCR   M"),
-        0x36 => {print!("MVI    M,#${:02x}", code[1]); opbytes = 2;},
+        0x36 => {
+            print!("MVI    M,#${:02x}", code[1]);
+            opbytes = 2;
+        }
         0x37 => print!("STC"),
 
         0x38 => print!("NOP"),
         0x39 => print!("DAD  SP"),
-        0x3a => {print!("LDA    ${:02x}{:02x}", code[2], code[1]); opbytes = 3;},
+        0x3a => {
+            print!("LDA    ${:02x}{:02x}", code[2], code[1]);
+            opbytes = 3;
+        }
         0x3b => print!("DCX   SP"),
         0x3c => print!("INR   A"),
         0x3d => print!("DCR   A"),
-        0x3e => {print!("MVI    A,#${:02x}", code[1]); opbytes = 2;},
+        0x3e => {
+            print!("MVI    A,#${:02x}", code[1]);
+            opbytes = 2;
+        }
         0x3f => print!("CMC"),
 
         0x40 => print!("MOV   B,B"),
@@ -377,89 +462,186 @@ fn disassemble8080_op(codebuffer: &[u8], pc: usize) -> usize {
 
         0xc0 => print!("RNZ"),
         0xc1 => print!("POP   B"),
-        0xc2 => {print!("JNZ    ${:02x}{:02x}", code[2], code[1]); opbytes = 3;},
-        0xc3 => {print!("JMP    ${:02x}{:02x}", code[2], code[1]); opbytes = 3;},
-        0xc4 => {print!("CNZ    ${:02x}{:02x}", code[2], code[1]); opbytes = 3;},
+        0xc2 => {
+            print!("JNZ    ${:02x}{:02x}", code[2], code[1]);
+            opbytes = 3;
+        }
+        0xc3 => {
+            print!("JMP    ${:02x}{:02x}", code[2], code[1]);
+            opbytes = 3;
+        }
+        0xc4 => {
+            print!("CNZ    ${:02x}{:02x}", code[2], code[1]);
+            opbytes = 3;
+        }
         0xc5 => print!("PUSH  B"),
-        0xc6 => {print!("ADI    #${:02x}", code[1]); opbytes = 2;},
+        0xc6 => {
+            print!("ADI    #${:02x}", code[1]);
+            opbytes = 2;
+        }
         0xc7 => print!("RST   0"),
         0xc8 => print!("RZ"),
         0xc9 => print!("RET"),
-        0xca => {print!("JZ     ${:02x}{:02x}", code[2], code[1]); opbytes = 3;},
-        0xcb => {print!("NOP")},
-        0xcc => {print!("CZ     ${:02x}{:02x}", code[2], code[1]); opbytes = 3;},
-        0xcd => {print!("CALL   ${:02x}{:02x}", code[2], code[1]); opbytes = 3;},
-        0xce => {print!("ACI    #${:02x}", code[1]); opbytes = 2;},
+        0xca => {
+            print!("JZ     ${:02x}{:02x}", code[2], code[1]);
+            opbytes = 3;
+        }
+        0xcb => print!("NOP"),
+        0xcc => {
+            print!("CZ     ${:02x}{:02x}", code[2], code[1]);
+            opbytes = 3;
+        }
+        0xcd => {
+            print!("CALL   ${:02x}{:02x}", code[2], code[1]);
+            opbytes = 3;
+        }
+        0xce => {
+            print!("ACI    #${:02x}", code[1]);
+            opbytes = 2;
+        }
         0xcf => print!("RST   1"),
 
         0xd0 => print!("RNC"),
         0xd1 => print!("POP   D"),
-        0xd2 => {print!("JNC    ${:02x}{:02x}", code[2], code[1]); opbytes = 3;},
-        0xd3 => {print!("OUT    #${:02x}", code[1]); opbytes = 2;},
-        0xd4 => {print!("CNC    ${:02x}{:02x}", code[2], code[1]); opbytes = 3;},
+        0xd2 => {
+            print!("JNC    ${:02x}{:02x}", code[2], code[1]);
+            opbytes = 3;
+        }
+        0xd3 => {
+            print!("OUT    #${:02x}", code[1]);
+            opbytes = 2;
+        }
+        0xd4 => {
+            print!("CNC    ${:02x}{:02x}", code[2], code[1]);
+            opbytes = 3;
+        }
         0xd5 => print!("PUSH  D"),
-        0xd6 => {print!("SUI    #${:02x}", code[1]); opbytes = 2;},
+        0xd6 => {
+            print!("SUI    #${:02x}", code[1]);
+            opbytes = 2;
+        }
         0xd7 => print!("RST   2"),
         0xd8 => print!("RC"),
         0xd9 => print!("RET"),
-        0xda => {print!("JC     ${:02x}{:02x}", code[2], code[1]); opbytes = 3;},
-        0xdb => {print!("IN     #${:02x}{:02x}", code[2], code[1]); opbytes = 3;},
-        0xdc => {print!("CC     ${:02x}{:02x}", code[2], code[1]); opbytes = 3;},
-        0xdd => {print!("CALL   ${:02x}{:02x}", code[2], code[1]); opbytes = 3;},
-        0xde => {print!("SBI    #${:02x}", code[1]); opbytes = 2;},
+        0xda => {
+            print!("JC     ${:02x}{:02x}", code[2], code[1]);
+            opbytes = 3;
+        }
+        0xdb => {
+            print!("IN     #${:02x}{:02x}", code[2], code[1]);
+            opbytes = 3;
+        }
+        0xdc => {
+            print!("CC     ${:02x}{:02x}", code[2], code[1]);
+            opbytes = 3;
+        }
+        0xdd => {
+            print!("CALL   ${:02x}{:02x}", code[2], code[1]);
+            opbytes = 3;
+        }
+        0xde => {
+            print!("SBI    #${:02x}", code[1]);
+            opbytes = 2;
+        }
         0xdf => print!("RST   3"),
 
         0xe0 => print!("RPO"),
         0xe1 => print!("POP   H"),
-        0xe2 => {print!("JPO    ${:02x}{:02x}", code[2], code[1]); opbytes = 3;},
+        0xe2 => {
+            print!("JPO    ${:02x}{:02x}", code[2], code[1]);
+            opbytes = 3;
+        }
         0xe3 => print!("XTHL"),
-        0xe4 => {print!("CPO    ${:02x}{:02x}", code[2], code[1]); opbytes = 3;},
+        0xe4 => {
+            print!("CPO    ${:02x}{:02x}", code[2], code[1]);
+            opbytes = 3;
+        }
         0xe5 => print!("PUSH  H"),
-        0xe6 => {print!("ANI    #${:02x}", code[1]); opbytes = 2;},
+        0xe6 => {
+            print!("ANI    #${:02x}", code[1]);
+            opbytes = 2;
+        }
         0xe7 => print!("RST   4"),
         0xe8 => print!("RPE"),
         0xe9 => print!("PCHL"),
-        0xea => {print!("JPE    ${:02x}{:02x}", code[2], code[1]); opbytes = 3;},
+        0xea => {
+            print!("JPE    ${:02x}{:02x}", code[2], code[1]);
+            opbytes = 3;
+        }
         0xeb => print!("XCHG"),
-        0xec => {print!("CPE    ${:02x}{:02x}", code[2], code[1]); opbytes = 3;},
-        0xed => {print!("CALL   ${:02x}{:02x}", code[2], code[1]); opbytes = 3;},
-        0xee => {print!("XRI    #${:02x}", code[1]); opbytes = 2;},
+        0xec => {
+            print!("CPE    ${:02x}{:02x}", code[2], code[1]);
+            opbytes = 3;
+        }
+        0xed => {
+            print!("CALL   ${:02x}{:02x}", code[2], code[1]);
+            opbytes = 3;
+        }
+        0xee => {
+            print!("XRI    #${:02x}", code[1]);
+            opbytes = 2;
+        }
         0xef => print!("RST   5"),
 
         0xf0 => print!("RP"),
         0xf1 => print!("POP   PSW"),
-        0xf2 => {print!("JP     ${:02x}{:02x}", code[2], code[1]); opbytes = 3;},
+        0xf2 => {
+            print!("JP     ${:02x}{:02x}", code[2], code[1]);
+            opbytes = 3;
+        }
         0xf3 => print!("DI"),
-        0xf4 => {print!("CP     ${:02x}{:02x}", code[2], code[1]); opbytes = 3;},
+        0xf4 => {
+            print!("CP     ${:02x}{:02x}", code[2], code[1]);
+            opbytes = 3;
+        }
         0xf5 => print!("PUSH  PSW"),
-        0xf6 => {print!("ORI    #${:02x}", code[1]); opbytes = 2;},
+        0xf6 => {
+            print!("ORI    #${:02x}", code[1]);
+            opbytes = 2;
+        }
         0xf7 => print!("RST   6"),
         0xf8 => print!("RM"),
         0xf9 => print!("SPHL"),
-        0xfa => {print!("JM     ${:02x}{:02x}", code[2], code[1]); opbytes = 3;},
+        0xfa => {
+            print!("JM     ${:02x}{:02x}", code[2], code[1]);
+            opbytes = 3;
+        }
         0xfb => print!("EI"),
-        0xfc => {print!("CM     ${:02x}{:02x}", code[2], code[1]); opbytes = 3;},
-        0xfd => {print!("CALL   ${:02x}{:02x}", code[2], code[1]); opbytes = 3;},
-        0xfe => {print!("CPI    #${:02x}", code[1]); opbytes = 2;},
+        0xfc => {
+            print!("CM     ${:02x}{:02x}", code[2], code[1]);
+            opbytes = 3;
+        }
+        0xfd => {
+            print!("CALL   ${:02x}{:02x}", code[2], code[1]);
+            opbytes = 3;
+        }
+        0xfe => {
+            print!("CPI    #${:02x}", code[1]);
+            opbytes = 2;
+        }
         0xff => print!("RST   7"),
 
         _ => {}
     }
 
+    println!("");
+
     opbytes
 }
 
-pub fn emulate8080(state: &mut State8080) {
+pub fn emulate8080(state: &mut State8080) -> i32 {
     let opcode = state.memory[state.pc];
     let mut ans: u16;
     let ans8: u8;
     let ans32: u32;
     let addr: usize;
+    disassemble8080_op(&state.memory, state.pc);
+    state.pc += 1;
     match opcode {
         0x00 => {}, // NOP
         0x01 => { // LXI B,#$WORD
-            state.c = state.memory[state.pc + 1];
-            state.b = state.memory[state.pc + 2];
+            state.c = state.byte1();
+            state.b = state.byte2();
             state.pc += 2;
         },
         0x02 => { // STAX B
@@ -972,6 +1154,6 @@ pub fn emulate8080(state: &mut State8080) {
 
         _ => {}
     };
-    state.pc += 1;
-}
 
+    return 0;
+}
