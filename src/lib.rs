@@ -183,9 +183,9 @@ impl State8080 {
     }
 
     fn push(&mut self, val: u16) {
+        self.sp -= 2;
         self.memory[self.sp] = (val & 0xff) as u8;
         self.memory[self.sp + 1] = (val >> 8) as u8;
-        self.sp -= 2;
     }
 
     fn ret(&mut self) {
@@ -194,7 +194,7 @@ impl State8080 {
 
     fn call(&mut self, addr: u16) {
         let pc = self.pc as u16;
-        self.push(pc);
+        self.push(pc + 2);
         self.pc = usize::from(addr);
     }
 }
@@ -233,10 +233,10 @@ fn disassemble8080_op(codebuffer: &[u8], pc: usize) -> usize {
 
         0x10 => print!("NOP"),
         0x11 => {
-            print!("LXI    B,#${:02x}{:02x}", code[2], code[1]);
+            print!("LXI    D,#${:02x}{:02x}", code[2], code[1]);
             opbytes = 3;
         }
-        0x12 => print!("STAX   B"),
+        0x12 => print!("STAX   D"),
         0x13 => print!("INX   D"),
         0x14 => print!("INR   D"),
         0x15 => print!("DCR   D"),
@@ -297,7 +297,7 @@ fn disassemble8080_op(codebuffer: &[u8], pc: usize) -> usize {
             opbytes = 3;
         }
         0x32 => {
-            print!("SHL    ${:02x}{:02x}", code[2], code[1]);
+            print!("SHLD   ${:02x}{:02x}", code[2], code[1]);
             opbytes = 3;
         }
         0x33 => print!("INX  SP"),
@@ -710,8 +710,8 @@ pub fn emulate8080(state: &mut State8080) -> i32 {
 
         0x10 => {}, // NOP
         0x11 => { // LXI B,#$WORD
-            state.e = state.byte2();
-            state.d = state.byte1();
+            state.e = state.byte1();
+            state.d = state.byte2();
             state.pc += 2;
         },
         0x12 => {state.a = state.at_bc()}, // // STAX B
@@ -732,6 +732,7 @@ pub fn emulate8080(state: &mut State8080) -> i32 {
         },
         0x16 => { //MVI D,#$BYTE
             state.b = state.byte1();
+            state.pc += 1;
         },
         0x17 => { // RAL
             state.fl.cy = (state.a >> 7) == 1;
@@ -780,6 +781,7 @@ pub fn emulate8080(state: &mut State8080) -> i32 {
             ans = state.word();
             state.memory[usize::from(ans)] = state.l;
             state.memory[usize::from(ans + 1)] = state.h;
+            state.pc += 2;
         },
         0x23 => { // INX H
             ans = (state.hl() + 1) as u16;
@@ -797,7 +799,7 @@ pub fn emulate8080(state: &mut State8080) -> i32 {
             state.set_r(ans8);
         },
         0x26 => { // MVI L,#$BYTE
-            state.l = state.byte1();
+            state.h = state.byte1();
             state.pc += 1;
         },
         0x27 => {}, // RAA
@@ -813,6 +815,7 @@ pub fn emulate8080(state: &mut State8080) -> i32 {
             ans = state.word();
             state.l = state.memory[usize::from(ans)];
             state.h = state.memory[usize::from(ans + 1)];
+            state.pc += 2;
         },
         0x2b => { // DCX H
             ans = (state.hl() - 1) as u16;
@@ -845,6 +848,7 @@ pub fn emulate8080(state: &mut State8080) -> i32 {
         0x32 => { // STA $WORD
             ans = state.word();
             state.memory[usize::from(ans)] = state.a;
+            state.pc += 2;
         },
         0x33 => { // INX SP
             state.sp = (state.sp + 1) & 0xffff;
@@ -864,6 +868,7 @@ pub fn emulate8080(state: &mut State8080) -> i32 {
         0x36 => { //MVI M,#$BYTE
             addr = state.hl();
             state.memory[addr] = state.byte1();
+            state.pc += 1;
         },
         0x37 => { // STC
             state.fl.cy = true;
@@ -879,6 +884,7 @@ pub fn emulate8080(state: &mut State8080) -> i32 {
         0x3a => { // LDA $WORD
             addr = usize::from(state.word());
             state.memory[addr] = state.a;
+            state.pc += 2;
 
         },
         0x3b => { // DCX SP
@@ -946,13 +952,13 @@ pub fn emulate8080(state: &mut State8080) -> i32 {
         0x66 => {state.h = state.at_hl()}, // MOV H,M
         0x67 => {state.h = state.a}, // MOV H,A
         0x68 => {state.l = state.b}, // MOV L,B
-        0x69 => {state.l = state.b}, // MOV L,C
-        0x6a => {state.l = state.b}, // MOV L,D
-        0x6b => {state.l = state.b}, // MOV L,E
-        0x6c => {state.l = state.b}, // MOV L,H
-        0x6d => {state.l = state.b}, // MOV L,L
+        0x69 => {state.l = state.c}, // MOV L,C
+        0x6a => {state.l = state.d}, // MOV L,D
+        0x6b => {state.l = state.e}, // MOV L,E
+        0x6c => {state.l = state.h}, // MOV L,H
+        0x6d => {state.l = state.l}, // MOV L,L
         0x6e => {state.l = state.at_hl()}, // MOV L,M
-        0x6f => {state.l = state.b}, // MOV L,A
+        0x6f => {state.l = state.a}, // MOV L,A
 
         0x70 => {addr = state.hl(); state.memory[addr] = state.b}, // MOV M,B
         0x71 => {addr = state.hl(); state.memory[addr] = state.c}, // MOV M,C
@@ -963,13 +969,13 @@ pub fn emulate8080(state: &mut State8080) -> i32 {
         0x76 => {}, // HLT
         0x77 => {addr = state.hl(); state.memory[addr] = state.a}, // MOV M,A
         0x78 => {state.a = state.b}, // MOV A,B
-        0x79 => {state.a = state.b}, // MOV A,C
-        0x7a => {state.a = state.b}, // MOV A,D
-        0x7b => {state.a = state.b}, // MOV A,E
-        0x7c => {state.a = state.b}, // MOV A,H
-        0x7d => {state.a = state.b}, // MOV A,L
+        0x79 => {state.a = state.c}, // MOV A,C
+        0x7a => {state.a = state.d}, // MOV A,D
+        0x7b => {state.a = state.e}, // MOV A,E
+        0x7c => {state.a = state.h}, // MOV A,H
+        0x7d => {state.a = state.l}, // MOV A,L
         0x7e => {state.a = state.at_hl()}, // MOV A,M
-        0x7f => {state.a = state.b}, // MOV A,A
+        0x7f => {state.a = state.a}, // MOV A,A
 
         0x80 => {ans8 = state.b; state.add(ans8)}, // ADD B
         0x81 => {ans8 = state.c; state.add(ans8)}, // ADD C
@@ -1042,16 +1048,16 @@ pub fn emulate8080(state: &mut State8080) -> i32 {
         0xc0 => {if !state.fl.z {state.ret()}}, // RNZ
         0xc1 => { // POP B
             ans = state.pop();
-            state.b = (ans & 0xff) as u8;
-            state.c = (ans >> 8) as u8
+            state.b = (ans >> 8) as u8;
+            state.c = (ans & 0xff) as u8;
         },
-        0xc2 => {if !state.fl.z {state.pc = usize::from(state.word())}}, // JNZ
-        0xc3 => {state.pc = usize::from(state.word())}, // JMP
+        0xc2 => {if !state.fl.z {state.pc = usize::from(state.word())} else {state.pc += 2}}, // JNZ
+        0xc3 => {state.pc = usize::from(state.word());}, // JMP
         0xc4 => { // CNZ $WORD
             if !state.fl.z {ans = state.word(); state.call(ans)}
         },
         0xc5 => {ans = state.bc() as u16; state.push(ans)} //PUSH  B,
-        0xc6 => {ans8 = state.byte1(); state.add(ans8)}, // ADI #$BYTE
+        0xc6 => {ans8 = state.byte1(); state.add(ans8); state.pc += 1;}, // ADI #$BYTE
         0xc7 => {state.unimplemented_instruction()}, // RST 0
         0xc8 => {if state.fl.z {state.ret()}}, // RZ
         0xc9 => {state.ret()}, // RET
@@ -1059,64 +1065,70 @@ pub fn emulate8080(state: &mut State8080) -> i32 {
         0xcb => {}, // NOP
         0xcc => {if state.fl.z {ans = state.word(); state.call(ans)}}, // CZ
         0xcd => {ans = state.word(); state.call(ans)}, // CALL $WORD
-        0xce => {ans8 = state.byte1(); state.adc(ans8)}, // ACI #$BYTE
+        0xce => {ans8 = state.byte1(); state.adc(ans8); state.pc += 1;}, // ACI #$BYTE
         0xcf => {state.unimplemented_instruction()}, // RST 1
 
         0xd0 => {if !state.fl.cy {state.ret()}}, // RNC
         0xd1 => { // POP D
             ans = state.pop();
-            state.d = (ans & 0xff) as u8;
-            state.e = (ans >> 8) as u8
+            state.d = (ans >> 8) as u8;
+            state.e = (ans & 0xff) as u8;
         },
-        0xd2 => {if !state.fl.cy {state.pc = usize::from(state.word())}}, // JNC
+        0xd2 => {if !state.fl.cy {state.pc = usize::from(state.word())} else {state.pc += 2}}, // JNC
         0xd3 => {state.pc += 1}, // OUT
         0xd4 => {if !state.fl.cy {ans = state.word(); state.call(ans)}}, // CNC
         0xd5 => {ans = state.de() as u16; state.push(ans)} //PUSH  D
-        0xd6 => {ans8 = state.byte1(); state.sub(ans8)}, // SUI #$BYTE
+        0xd6 => {ans8 = state.byte1(); state.sub(ans8); state.pc += 1;}, // SUI #$BYTE
         0xd7 => {state.unimplemented_instruction()}, // RST 2
         0xd8 => {if state.fl.cy {state.ret()}}, // RC
         0xd9 => {}, // NOP
-        0xda => {if state.fl.cy {state.pc = usize::from(state.word())}}, // JC
+        0xda => {if state.fl.cy {state.pc = usize::from(state.word())} else {state.pc += 2}}, // JC
         0xdb => {state.pc += 1}, // IN
         0xdc => {if state.fl.cy {ans = state.word(); state.call(ans)}}, // CC
         0xdd => {ans = state.word(); state.call(ans)}, // CALL
-        0xde => {ans8 = state.byte1(); state.sbb(ans8)}, // SBI #$BYTE
+        0xde => {ans8 = state.byte1(); state.sbb(ans8); state.pc += 1;}, // SBI #$BYTE
         0xdf => {state.unimplemented_instruction()}, // RST 3
 
         0xe0 => {if state.fl.p {state.ret()}}, // RPO
         0xe1 => { // POP H
             ans = state.pop();
-            state.h = (ans & 0xff) as u8;
-            state.l = (ans >> 8) as u8
+            state.h = (ans >> 8) as u8;
+            state.l = (ans & 0xff) as u8;
         },
-        0xe2 => {if state.fl.p {state.pc = usize::from(state.word())}}, // JPO
+        0xe2 => {if state.fl.p {state.pc = usize::from(state.word())} else {state.pc += 2}}, // JPO
         0xe3 => { // XTHL
             ans = state.pop();
             let temp = state.hl() as u16;
             state.push(temp);
-            state.h = (ans & 0xff) as u8;
-            state.l = (ans >> 8) as u8;
+            state.h = (ans >> 8) as u8;
+            state.l = (ans & 0xff) as u8;
         },
         0xe4 => {if state.fl.p {ans = state.word(); state.call(ans)}}, // CPO
         0xe5 => {ans = state.hl() as u16; state.push(ans)} //PUSH  H
-        0xe6 => {ans8 = state.byte1(); state.and(ans8)}, // ANI #$BYTE
+        0xe6 => {ans8 = state.byte1(); state.and(ans8); state.pc += 1;}, // ANI #$BYTE
         0xe7 => {state.unimplemented_instruction()}, // RST 4
         0xe8 => {if !state.fl.p {state.ret()}}, // RPE
         0xe9 => { // PCHL
             state.pc = (usize::from(state.h) << 8) | usize::from(state.l);
         },
-        0xea => {if !state.fl.p {state.pc = usize::from(state.word())}}, // JPE
-        0xeb => { // XTHL
-            ans = state.de() as u16;
-            let temp = state.hl() as u16;
-            state.d = (temp & 0xff) as u8;
-            state.e = (temp >> 8) as u8;
-            state.h = (ans & 0xff) as u8;
-            state.l = (ans >> 8) as u8;
+        0xea => {if !state.fl.p {state.pc = usize::from(state.word())} else {state.pc += 2}}, // JPE
+        0xeb => { // XCHG
+            let mut temp = state.d;
+            state.d = state.h;
+            state.h = temp;
+            temp = state.e;
+            state.e = state.l;
+            state.l = temp;
+            //ans = state.de() as u16;
+            //let temp = state.hl() as u16;
+            //state.d = (temp & 0xff) as u8;
+            //state.e = (temp >> 8) as u8;
+            //state.h = (ans & 0xff) as u8;
+            //state.l = (ans >> 8) as u8;
         },
         0xec => {if !state.fl.p {ans = state.word(); state.call(ans)}}, // CPE
         0xed => {}, // NOP
-        0xee => {ans8 = state.byte1(); state.xor(ans8)}, // XRI #$BYTE
+        0xee => {ans8 = state.byte1(); state.xor(ans8); state.pc += 1;}, // XRI #$BYTE
         0xef => {state.unimplemented_instruction()}, // RST 4
 
         0xf0 => {if state.fl.s {state.ret()}}, // RP
@@ -1129,7 +1141,7 @@ pub fn emulate8080(state: &mut State8080) -> i32 {
             state.fl.p = ans & 0x04 > 0;
             state.fl.cy = ans & 0x01 > 0;
         },
-        0xf2 => {if !state.fl.s {state.pc = usize::from(state.word())}}, // JP
+        0xf2 => {if !state.fl.s {state.pc = usize::from(state.word())} else {state.pc += 2}}, // JP
         0xf3 => {state.int_enable = 0}, // DI
         0xf4 => {if !state.fl.s {ans = state.word(); state.call(ans)}}, // CP
         0xf5 => { // PUSH PWS
@@ -1141,7 +1153,7 @@ pub fn emulate8080(state: &mut State8080) -> i32 {
             if state.fl.cy {ans |= 0x01};
             state.push(ans);
         },
-        0xf6 => {ans8 = state.byte1(); state.or(ans8)}, // ANI #$BYTE
+        0xf6 => {ans8 = state.byte1(); state.or(ans8); state.pc += 1;}, // ANI #$BYTE
         0xf7 => {state.unimplemented_instruction()}, // RST 6
         0xf8 => {state.unimplemented_instruction()}, // RM
         0xf9 => {state.sp = state.hl()}, // SPHL
@@ -1149,11 +1161,20 @@ pub fn emulate8080(state: &mut State8080) -> i32 {
         0xfb => {state.int_enable = 1}, // EI
         0xfc => {state.unimplemented_instruction()}, // CM
         0xfd => {ans = state.word(); state.call(ans)}, // CALL
-        0xfe => {ans8 = state.byte1(); state.cmp(ans8)}, // CPI #$BYTE
+        0xfe => {ans8 = state.byte1(); state.cmp(ans8); state.pc += 1;}, // CPI #$BYTE
         0xff => {state.unimplemented_instruction()}, // RST 7
 
         _ => {}
     };
+
+    println!(
+        "Registers: A: {:02x} BC: {:02x}{:02x} DE: {:02x}{:02x} HL: {:02x}{:02x}",
+        state.a, state.b, state.c, state.d, state.e, state.h, state.l
+    );
+    println!(
+        "Flags: s: {} z: {} p: {} cy: {}",
+        state.fl.s, state.fl.z, state.fl.p, state.fl.cy
+    );
 
     return 0;
 }
