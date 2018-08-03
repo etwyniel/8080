@@ -9,31 +9,37 @@ mod tests {
     }
 }
 
-struct Flags {
-    z: bool,
-    s: bool,
-    p: bool,
-    cy: bool,
-    ac: bool, //pad: i32
+pub trait InOutHandler {
+    fn write<T: InOutHandler>(&mut self, port: u8, state: &mut State8080<T>);
+    fn read<T: InOutHandler>(&mut self, port: u8, state: &mut State8080<T>);
 }
 
-pub struct State8080 {
-    a: u8,
-    b: u8,
-    c: u8,
-    d: u8,
-    e: u8,
-    h: u8,
-    l: u8,
-    sp: usize,
-    pc: usize,
-    memory: Vec<u8>,
-    fl: Flags,
-    int_enable: u8,
+pub struct Flags {
+    pub z: bool,
+    pub s: bool,
+    pub p: bool,
+    pub cy: bool,
+    pub ac: bool, //pad: i32
 }
 
-impl State8080 {
-    pub fn new() -> State8080 {
+pub struct State8080<T: InOutHandler> {
+    pub a: u8,
+    pub b: u8,
+    pub c: u8,
+    pub d: u8,
+    pub e: u8,
+    pub h: u8,
+    pub l: u8,
+    pub sp: usize,
+    pub pc: usize,
+    pub memory: Vec<u8>,
+    pub fl: Flags,
+    pub int_enable: bool,
+    pub io: T,
+}
+
+impl<T: InOutHandler> State8080<T> {
+    pub fn new(io_handler: T) -> State8080<T> {
         State8080 {
             a: 0,
             b: 0,
@@ -52,7 +58,8 @@ impl State8080 {
                 cy: false,
                 ac: false,
             },
-            int_enable: 0,
+            int_enable: false,
+            io: io_handler,
         }
     }
 
@@ -62,6 +69,10 @@ impl State8080 {
         offset: usize,
     ) -> std::io::Result<usize> {
         File::open(filename)?.read(&mut self.memory[offset..])
+    }
+
+    pub fn generate_interrupt(&mut self, interrupt_num: u8) {
+        self.call(u16::from(interrupt_num << 8));
     }
 
     fn unimplemented_instruction(&mut self) {
@@ -624,12 +635,12 @@ fn disassemble8080_op(codebuffer: &[u8], pc: usize) -> usize {
         _ => {}
     }
 
-    println!("");
+    println!();
 
     opbytes
 }
 
-pub fn emulate8080(state: &mut State8080) -> i32 {
+pub fn emulate8080<T: InOutHandler>(state: &mut State8080<T>) -> i32 {
     let opcode = state.memory[state.pc];
     let mut ans: u16;
     let ans8: u8;
@@ -1066,7 +1077,7 @@ pub fn emulate8080(state: &mut State8080) -> i32 {
         0xcc => {if state.fl.z {ans = state.word(); state.call(ans)}}, // CZ
         0xcd => {ans = state.word(); state.call(ans)}, // CALL $WORD
         0xce => {ans8 = state.byte1(); state.adc(ans8); state.pc += 1;}, // ACI #$BYTE
-        0xcf => {state.unimplemented_instruction()}, // RST 1
+        0xcf => {state.generate_interrupt(1);}, // RST 1
 
         0xd0 => {if !state.fl.cy {state.ret()}}, // RNC
         0xd1 => { // POP D
@@ -1113,18 +1124,8 @@ pub fn emulate8080(state: &mut State8080) -> i32 {
         },
         0xea => {if !state.fl.p {state.pc = usize::from(state.word())} else {state.pc += 2}}, // JPE
         0xeb => { // XCHG
-            let mut temp = state.d;
-            state.d = state.h;
-            state.h = temp;
-            temp = state.e;
-            state.e = state.l;
-            state.l = temp;
-            //ans = state.de() as u16;
-            //let temp = state.hl() as u16;
-            //state.d = (temp & 0xff) as u8;
-            //state.e = (temp >> 8) as u8;
-            //state.h = (ans & 0xff) as u8;
-            //state.l = (ans >> 8) as u8;
+            std::mem::swap(&mut state.d, &mut state.h);
+            std::mem::swap(&mut state.e, &mut state.l);
         },
         0xec => {if !state.fl.p {ans = state.word(); state.call(ans)}}, // CPE
         0xed => {}, // NOP
@@ -1142,7 +1143,7 @@ pub fn emulate8080(state: &mut State8080) -> i32 {
             state.fl.cy = ans & 0x01 > 0;
         },
         0xf2 => {if !state.fl.s {state.pc = usize::from(state.word())} else {state.pc += 2}}, // JP
-        0xf3 => {state.int_enable = 0}, // DI
+        0xf3 => {state.int_enable = false}, // DI
         0xf4 => {if !state.fl.s {ans = state.word(); state.call(ans)}}, // CP
         0xf5 => { // PUSH PWS
             ans = u16::from(state.a) << 8;
@@ -1158,7 +1159,7 @@ pub fn emulate8080(state: &mut State8080) -> i32 {
         0xf8 => {state.unimplemented_instruction()}, // RM
         0xf9 => {state.sp = state.hl()}, // SPHL
         0xfa => {state.unimplemented_instruction()}, // JM
-        0xfb => {state.int_enable = 1}, // EI
+        0xfb => {state.int_enable = true}, // EI
         0xfc => {state.unimplemented_instruction()}, // CM
         0xfd => {ans = state.word(); state.call(ans)}, // CALL
         0xfe => {ans8 = state.byte1(); state.cmp(ans8); state.pc += 1;}, // CPI #$BYTE
@@ -1176,5 +1177,5 @@ pub fn emulate8080(state: &mut State8080) -> i32 {
         state.fl.s, state.fl.z, state.fl.p, state.fl.cy
     );
 
-    return 0;
+    0
 }
