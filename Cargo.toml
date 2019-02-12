@@ -2,5 +2,6 @@
 name = "emulator"
 version = "0.1.0"
 authors = ["Aymeric Beringer <aymeric.beringer@epita.fr>"]
+edition = "2018"
 
 [dependencies]
