@@ -11,15 +11,17 @@ mod tests {
 }
 
 pub trait InOutHandler {
-    fn write<T: InOutHandler>(&mut self, port: u8, state: &mut State8080<T>);
-    fn read<T: InOutHandler>(&mut self, port: u8, state: &mut State8080<T>);
+    fn read(&mut self, port: u8) -> u8;
+    fn write(&mut self, port: u8, val: u8);
 }
 
 pub struct DefaultHandler;
 
 impl InOutHandler for DefaultHandler {
-    fn write<T: InOutHandler>(&mut self, _port: u8, _state: &mut State8080<T>) {}
-    fn read<T: InOutHandler>(&mut self, _port: u8, _state: &mut State8080<T>) {}
+    fn read(&mut self, _port: u8) -> u8 {
+        0
+    }
+    fn write(&mut self, _port: u8, _val: u8) {}
 }
 
 pub struct Flags {
@@ -32,9 +34,9 @@ pub struct Flags {
 
 impl Flags {
     pub fn clear(&mut self) {
-        self.z  = true;
-        self.s  = false;
-        self.p  = true;
+        self.z = true;
+        self.s = false;
+        self.p = true;
         self.cy = false;
         self.ac = false;
     }
@@ -43,7 +45,9 @@ impl Flags {
 fn parity(mut x: u8, cy: bool) -> bool {
     let mut p = if cy { 1 } else { 0 };
     for _ in 0..8 {
-        if x & 1 != 0 { p += 1 };
+        if x & 1 != 0 {
+            p += 1
+        };
         x >>= 1;
     }
     p & 1 == 0
@@ -53,6 +57,8 @@ fn parity(mut x: u8, cy: bool) -> bool {
 fn parity_test() {
     assert!(!parity(0x99, true));
 }
+
+type Instruction<T> = fn(&mut State8080<T>, u8) -> usize;
 
 pub struct State8080<T: InOutHandler> {
     pub a: u8,
@@ -68,6 +74,7 @@ pub struct State8080<T: InOutHandler> {
     pub fl: Flags,
     pub int_enable: bool,
     pub io: T,
+    pub instructions: [Instruction<T>; 256],
 }
 
 impl<T: InOutHandler> State8080<T> {
@@ -92,6 +99,526 @@ impl<T: InOutHandler> State8080<T> {
             },
             int_enable: false,
             io: io_handler,
+            instructions: [
+                // NOP
+                |_state, _op| 0, // 0x00
+                // LXI B,#$WORD
+                Self::lxi, // 0x01
+                // STAX B
+                Self::stax, // 0x02
+                // INX B
+                Self::inx, // 0x03
+                // INR B
+                Self::inr, // 0x04
+                // DCR B
+                Self::dcr, // 0x05
+                // MVI B,#$BYTE
+                Self::mvi, // 0x06
+                // RLC
+                |_state, _op| {
+                    let bit = _state.a >> 7;
+                    _state.a = (_state.a << 1) | bit;
+                    _state.fl.cy = bit == 1;
+                    0
+                }, // 0x07
+                // NOP
+                |_state, _op| 0, // 0x08
+                // DAD B
+                Self::dad, // 0x09
+                // LDAX B
+                Self::ldax, // 0x0a
+                // DCX B
+                Self::dcx, // 0x0b
+                // INR C
+                Self::inr, // 0x0c
+                // DCR C
+                Self::dcr, // 0x0d
+                // MVI C,#$BYTE
+                Self::mvi, // 0x0e
+                // RRC
+                |_state, _op| {
+                    let bit = _state.a << 7;
+                    _state.a = (_state.a >> 1) | bit;
+                    _state.fl.cy = bit > 0;
+                    0
+                }, // 0x0f
+                // NOP
+                |_state, _op| 0, // 0x10
+                // LXI D,#$WORD
+                Self::lxi, // 0x11
+                // STAX D
+                Self::stax, // 0x12
+                // INX D
+                Self::inx, // 0x13
+                // INR D
+                Self::inr, // 0x14
+                // DCR D
+                Self::dcr, // 0x15
+                // MVI D,#$BYTE
+                Self::mvi, // 0x16
+                // RAL
+                |_state, _op| {
+                    let prev_carry = if _state.fl.cy { 1 } else { 0 };
+                    _state.fl.cy = (_state.a >> 7) == 1;
+                    _state.a = (_state.a << 1) | prev_carry;
+                    0
+                }, // 0x17
+                // NOP
+                |_state, _op| 0, // 0x18
+                // DAD D
+                Self::dad, // 0x19
+                // LDAX D
+                Self::ldax, // 0x1a
+                // DCX D
+                Self::dcx, // 0x1b
+                // INR E
+                Self::inr, // 0x1c
+                // DCR E
+                Self::dcr, // 0x1d
+                // MVI E,#$BYTE
+                Self::mvi, // 0x1e
+                // RAR
+                |_state, _op| {
+                    // RAR
+                    let prev_carry = if _state.fl.cy { 1 } else { 0 };
+                    _state.fl.cy = (_state.a & 1) == 1;
+                    _state.a = (_state.a >> 1) | prev_carry;
+                    0
+                }, // 0x1f
+                // RIM
+                |_state, _op| 0, // 0x20
+                // LXI H,#$WORD
+                Self::lxi, // 0x21
+                // SHLD $WORD
+                |_state, _op| {
+                    let val = _state.word();
+                    _state.memory[usize::from(val)] = _state.l;
+                    _state.memory[usize::from(val + 1)] = _state.h;
+                    2
+                }, // 0x22
+                // INX H
+                Self::inx, // 0x23
+                // INR H
+                Self::inr, // 0x24
+                // DCR H
+                Self::dcr, // 0x25
+                // MVI L,#$BYTE
+                Self::mvi, // 0x26
+                // RAA
+                |_state, _op| 0, // 0x27
+                // NOP
+                |_state, _op| 0, // 0x28
+                // DAD H
+                Self::dad, // 0x29
+                // LHLD $WORD
+                |_state, _op| {
+                    let addr = _state.word();
+                    _state.l = _state.memory[usize::from(addr)];
+                    _state.h = _state.memory[usize::from(addr + 1)];
+                    2
+                }, // 0x2a
+                // DCX H
+                Self::dcx, // 0x2b
+                // INR L
+                Self::inr, // 0x2c
+                //DCR L
+                Self::dcr, // 0x2d
+                // MVI L,#$BYTE
+                Self::mvi, // 0x2e
+                // CMA
+                |_state, _op| {
+                    _state.a = !_state.a;
+                    0
+                }, // 0x2f
+                // NOP
+                |_state, _op| 0, // 0x30
+                // LXI SP,#$WORD
+                Self::lxi, // 0x31
+                // STA $WORD
+                |_state, _op| {
+                    let addr = _state.word();
+                    _state.memory[usize::from(addr)] = _state.a;
+                    2
+                }, // 0x32
+                // INX SP
+                Self::inx, // 0x33
+                // INR M
+                Self::inr, // 0x34
+                // DCR M
+                Self::dcr, // 0x35
+                // MVI M,#$BYTE
+                Self::mvi, // 0x36
+                // STC
+                |_state, _op| {
+                    _state.fl.cy = true;
+                    0
+                }, // 0x37
+                // NOP
+                |_state, _op| 0, // 0x38
+                // DAD SP
+                Self::dad, // 0x39
+                // LDA $WORD
+                |_state, _op| {
+                    let addr = usize::from(_state.word());
+                    _state.a = _state.memory[addr];
+                    2
+                }, // 0x3a
+                // DCX SP
+                Self::dcx, // 0x3b
+                // INR A
+                Self::inr, // 0x3c
+                // DCR A
+                Self::dcr, // 0x3d
+                // MVI A,#$BYTE
+                Self::mvi, // 0x3e
+                // CMC
+                |_state, _op| {
+                    _state.fl.cy = !_state.fl.cy;
+                    0
+                }, // 0x3f
+                // MOV DST,SRC
+                Self::mov, // 0x40
+                Self::mov, // 0x41
+                Self::mov, // 0x42
+                Self::mov, // 0x43
+                Self::mov, // 0x44
+                Self::mov, // 0x45
+                Self::mov, // 0x46
+                Self::mov, // 0x47
+                Self::mov, // 0x48
+                Self::mov, // 0x49
+                Self::mov, // 0x4a
+                Self::mov, // 0x4b
+                Self::mov, // 0x4c
+                Self::mov, // 0x4d
+                Self::mov, // 0x4e
+                Self::mov, // 0x4f
+                Self::mov, // 0x50
+                Self::mov, // 0x51
+                Self::mov, // 0x52
+                Self::mov, // 0x53
+                Self::mov, // 0x54
+                Self::mov, // 0x55
+                Self::mov, // 0x56
+                Self::mov, // 0x57
+                Self::mov, // 0x58
+                Self::mov, // 0x59
+                Self::mov, // 0x5a
+                Self::mov, // 0x5b
+                Self::mov, // 0x5c
+                Self::mov, // 0x5d
+                Self::mov, // 0x5e
+                Self::mov, // 0x5f
+                Self::mov, // 0x60
+                Self::mov, // 0x61
+                Self::mov, // 0x62
+                Self::mov, // 0x63
+                Self::mov, // 0x64
+                Self::mov, // 0x65
+                Self::mov, // 0x66
+                Self::mov, // 0x67
+                Self::mov, // 0x68
+                Self::mov, // 0x69
+                Self::mov, // 0x6a
+                Self::mov, // 0x6b
+                Self::mov, // 0x6c
+                Self::mov, // 0x6d
+                Self::mov, // 0x6e
+                Self::mov, // 0x6f
+                Self::mov, // 0x70
+                Self::mov, // 0x71
+                Self::mov, // 0x72
+                Self::mov, // 0x73
+                Self::mov, // 0x74
+                Self::mov, // 0x75
+                Self::mov, // 0x76
+                Self::mov, // 0x77
+                Self::mov, // 0x78
+                Self::mov, // 0x79
+                Self::mov, // 0x7a
+                Self::mov, // 0x7b
+                Self::mov, // 0x7c
+                Self::mov, // 0x7d
+                Self::mov, // 0x7e
+                Self::mov, // 0x7f
+                // ADD REG
+                Self::add_instr, // 0x80
+                Self::add_instr, // 0x81
+                Self::add_instr, // 0x82
+                Self::add_instr, // 0x83
+                Self::add_instr, // 0x84
+                Self::add_instr, // 0x85
+                Self::add_instr, // 0x86
+                Self::add_instr, // 0x87
+                // ADC REG
+                Self::adc_instr, // 0x88
+                Self::adc_instr, // 0x89
+                Self::adc_instr, // 0x8a
+                Self::adc_instr, // 0x8b
+                Self::adc_instr, // 0x8c
+                Self::adc_instr, // 0x8d
+                Self::adc_instr, // 0x8e
+                Self::adc_instr, // 0x8f
+                // SUB REG
+                Self::sub_instr, // 0x90
+                Self::sub_instr, // 0x91
+                Self::sub_instr, // 0x92
+                Self::sub_instr, // 0x93
+                Self::sub_instr, // 0x94
+                Self::sub_instr, // 0x95
+                Self::sub_instr, // 0x96
+                Self::sub_instr, // 0x97
+                // SBB REG
+                Self::sbb_instr, // 0x98
+                Self::sbb_instr, // 0x99
+                Self::sbb_instr, // 0x9a
+                Self::sbb_instr, // 0x9b
+                Self::sbb_instr, // 0x9c
+                Self::sbb_instr, // 0x9d
+                Self::sbb_instr, // 0x9e
+                Self::sbb_instr, // 0x9f
+                // AND REG
+                Self::and_instr, // 0xa0
+                Self::and_instr, // 0xa1
+                Self::and_instr, // 0xa2
+                Self::and_instr, // 0xa3
+                Self::and_instr, // 0xa4
+                Self::and_instr, // 0xa5
+                Self::and_instr, // 0xa6
+                Self::and_instr, // 0xa7
+                // XOR REG
+                Self::xor_instr, // 0xa8
+                Self::xor_instr, // 0xa9
+                Self::xor_instr, // 0xaa
+                Self::xor_instr, // 0xab
+                Self::xor_instr, // 0xac
+                Self::xor_instr, // 0xad
+                Self::xor_instr, // 0xae
+                Self::xor_instr, // 0xaf
+                // OR REG
+                Self::or_instr, // 0xb0
+                Self::or_instr, // 0xb1
+                Self::or_instr, // 0xb2
+                Self::or_instr, // 0xb3
+                Self::or_instr, // 0xb4
+                Self::or_instr, // 0xb5
+                Self::or_instr, // 0xb6
+                Self::or_instr, // 0xb7
+                // CMP REG
+                Self::cmp_instr, // 0xb8
+                Self::cmp_instr, // 0xb9
+                Self::cmp_instr, // 0xba
+                Self::cmp_instr, // 0xbb
+                Self::cmp_instr, // 0xbc
+                Self::cmp_instr, // 0xbd
+                Self::cmp_instr, // 0xbe
+                Self::cmp_instr, // 0xbf
+                // RNZ
+                Self::ret_instr, // 0xc0
+                // POP B
+                Self::pop_instr, // 0xc1
+                // JNZ
+                Self::jmp_instr, // 0xc2
+                // JMP
+                Self::jmp_instr, // 0xc3
+                // CNZ $WORD
+                Self::call_instr, // 0xc4
+                // PUSH B
+                Self::push_instr, // 0xc5
+                // ADI #$BYTE
+                |_state, _op| {
+                    let val = _state.byte1();
+                    _state.add(val);
+                    1
+                }, // 0xc6
+                // RST 0
+                Self::rst, // 0xc7
+                // RZ
+                Self::ret_instr, // 0xc8
+                // RET
+                Self::ret_instr, // 0xc9
+                // JZ
+                Self::jmp_instr, // 0xca
+                // NOP
+                |_state, _op| 0, // 0xcb
+                // CZ
+                Self::call_instr, // 0xcc
+                // CALL $WORD
+                Self::call_instr, // 0xcd
+                // ACI #$BYTE
+                |_state, _op| {
+                    let val = _state.byte1();
+                    _state.adc(val);
+                    1
+                }, // 0xce
+                // RST
+                Self::rst, // 0xcf
+                // RNC
+                Self::ret_instr, // 0xd0
+                // POP D
+                Self::pop_instr, // 0xd1
+                // JNC
+                Self::jmp_instr, // 0xd2
+                // OUT
+                |_state, _op| {
+                    _state.io.write(_state.byte1(), _state.a);
+                    1
+                }, // 0xd3
+                // CNC
+                Self::call_instr, // 0xd4
+                // PUSH D
+                Self::push_instr, // 0xd5
+                // SUI #$BYTE
+                |_state, _op| {
+                    let val = _state.byte1();
+                    _state.sub(val);
+                    1
+                }, // 0xd6
+                // RST 2
+                Self::rst, // 0xd7
+                // RC
+                Self::ret_instr, // 0xd8
+                // NOP
+                |_state, _op| 0, // 0xd9
+                // JC
+                Self::jmp_instr, // 0xda
+                // IN
+                |_state, _op| {
+                    _state.a = _state.io.read(_state.byte1());
+                    1
+                }, // 0xdb
+                // CC
+                Self::call_instr, // 0xdc
+                // CALL
+                Self::call_instr, // 0xdd
+                // SBI #$BYTE
+                |_state, _op| {
+                    let val = _state.byte1();
+                    _state.sbb(val);
+                    1
+                }, // 0xde
+                // RST 3
+                Self::rst, // 0xdf
+                // RPO
+                Self::ret_instr, // 0xe0
+                // POP H
+                Self::pop_instr, // 0xe1
+                // JPO
+                Self::jmp_instr, // 0xe2
+                // XTHL
+                |_state, _op| {
+                    let val = _state.pop();
+                    _state.push(_state.hl() as u16);
+                    _state.h = (val >> 8) as u8;
+                    _state.l = val as u8;
+                    0
+                }, // 0xe3
+                // CPO
+                Self::call_instr, // 0xe4
+                // PUSH H
+                Self::push_instr, // 0xe5
+                // ANI #$BYTE
+                |_state, _op| {
+                    let val = _state.byte1();
+                    _state.and(val);
+                    1
+                }, // 0xe6
+                // RST 4
+                Self::rst, // 0xe7
+                // RPE
+                Self::ret_instr, // 0xe8
+                // PCHL
+                |_state, _op| {
+                    _state.pc = (usize::from(_state.h) << 8) | usize::from(_state.l);
+                    0
+                }, // 0xe9
+                // JPE
+                Self::jmp_instr, // 0xea
+                // XCHG
+                |_state, _op| {
+                    std::mem::swap(&mut _state.d, &mut _state.h);
+                    std::mem::swap(&mut _state.e, &mut _state.l);
+                    0
+                }, // 0xeb
+                // CPE
+                Self::call_instr, // 0xec
+                // NOP
+                |_state, _op| 0, // 0xed
+                // XRI #$BYTE
+                |_state, _op| {
+                    let val = _state.byte1();
+                    _state.xor(val);
+                    1
+                }, // 0xee
+                // RST 5
+                Self::rst, // 0xef
+                // RP
+                Self::ret_instr, // 0xf0
+                // POP PSW
+                |_state, _op| {
+                    let val = _state.pop();
+                    _state.a = (val >> 8) as u8;
+                    _state.fl.s = val & 0x80 > 0;
+                    _state.fl.z = val & 0x40 > 0;
+                    _state.fl.ac = val & 0x10 > 0;
+                    _state.fl.p = val & 0x04 > 0;
+                    _state.fl.cy = val & 0x01 > 0;
+                    0
+                }, // 0xf1
+                // JP $WORD
+                Self::jmp_instr, // 0xf2
+                // DI
+                |_state, _op| {
+                    _state.int_enable = false;
+                    0
+                }, // 0xf3
+                // CP
+                Self::call_instr, // 0xf4
+                // PUSH PSW
+                |_state, _op| {
+                    let mut val = u16::from(_state.a) << 8;
+                    if _state.fl.s {val |= 0x80};
+                    if _state.fl.z {val |= 0x40};
+                    if _state.fl.ac {val |= 0x10};
+                    if _state.fl.p {val |= 0x04};
+                    if _state.fl.cy {val |= 0x01};
+                    _state.push(val);
+                    0
+                }, // 0xf5
+                // ORI #$BYTE
+                |_state, _op| {
+                    let val = _state.byte1();
+                    _state.or(val);
+                    1
+                }, // 0xf6
+                // RST 6
+                Self::rst, // 0xf7
+                // RM
+                Self::ret_instr, // 0xf8
+                // SPHL
+                |_state, _op| {
+                    _state.sp = _state.hl();
+                    0
+                }, // 0xf9
+                // JM
+                Self::jmp_instr, // 0xfa
+                |_state, _op| {
+                    _state.int_enable = true;
+                    0
+                }, // 0xfb
+                // CM
+                Self::call_instr, // 0xfc
+                // CALL
+                Self::call_instr, // 0xfd
+                // CPI #$BYTE
+                |_state, _op| {
+                    let val = _state.byte1();
+                    _state.cmp(val);
+                    1
+                }, // 0xfe
+                // RST 7
+                Self::rst, // 0xff
+                ],
         }
     }
 
@@ -103,7 +630,10 @@ impl<T: InOutHandler> State8080<T> {
             3 => self.e = val,
             4 => self.h = val,
             5 => self.l = val,
-            6 => { let addr = self.hl(); self.memory[addr] = val },
+            6 => {
+                let addr = self.hl();
+                self.memory[addr] = val
+            }
             7 => self.a = val,
             _ => panic!("Invalid register number"),
         }
@@ -123,6 +653,54 @@ impl<T: InOutHandler> State8080<T> {
         }
     }
 
+    pub fn get_long(&self, op: u8) -> usize {
+        match (op >> 4) & 3 {
+            0 => self.bc(),
+            1 => self.de(),
+            2 => self.hl(),
+            3 => self.sp,
+            _ => panic!("Invalid long register"),
+        }
+    }
+
+    pub fn get_flag(&self, op: u8) -> bool {
+        if op & 1 == 1 {
+            return true;
+        }
+        let mut neg = op & (1 << 3) == 0;
+        let res = match (op >> 4) & 0b11 {
+            0 => self.fl.z,
+            1 => self.fl.cy,
+            2 => self.fl.p,
+            3 => self.fl.s,
+            _ => panic!("Invalid flag number"),
+        };
+        if neg {
+            !res
+        } else {
+            res
+        }
+    }
+
+    pub fn set_long(&mut self, op: u8, (low, high): (u8, u8)) {
+        match (op >> 4) & 3 {
+            0 => {
+                self.b = high;
+                self.c = low
+            }
+            1 => {
+                self.d = high;
+                self.e = low
+            }
+            2 => {
+                self.h = high;
+                self.l = low
+            }
+            3 => self.sp = usize::from(high) << 8 | usize::from(low),
+            _ => panic!("Invalid long register"),
+        }
+    }
+
     pub fn read_file_in_memory_at(
         &mut self,
         filename: &str,
@@ -132,23 +710,23 @@ impl<T: InOutHandler> State8080<T> {
     }
 
     pub fn generate_interrupt(&mut self, interrupt_num: u8) {
-        self.call(u16::from(interrupt_num) << 8);
+        if self.int_enable {
+            // println!("* Generating interrupt {}", interrupt_num);
+            self.int_enable = false;
+            self.push(self.pc as u16);
+            self.pc = usize::from(interrupt_num << 3);
+        }
     }
 
-    fn unimplemented_instruction(&mut self) {
-        println!("Error: unimplemented instruction");
-        std::process::exit(1);
-    }
-
-    fn bc(&self) -> usize {
+    pub fn bc(&self) -> usize {
         (usize::from(self.b) << 8) | usize::from(self.c)
     }
 
-    fn de(&self) -> usize {
+    pub fn de(&self) -> usize {
         (usize::from(self.d) << 8) | usize::from(self.e)
     }
 
-    fn hl(&self) -> usize {
+    pub fn hl(&self) -> usize {
         (usize::from(self.h) << 8) | usize::from(self.l)
     }
 
@@ -262,27 +840,14 @@ impl<T: InOutHandler> State8080<T> {
         self.memory[self.sp + 1] = (val >> 8) as u8;
     }
 
-    fn ret(&mut self) {
+    pub fn ret(&mut self) {
         self.pc = usize::from(self.pop());
     }
 
-    fn call(&mut self, addr: u16) {
-        if addr == 5 { // CPUDIAG print routine
-            if self.c != 9 {
-                return;
-            }
-            let mut s = self.de();
-            while self.memory[s] != b'$' {
-                print!("{}", self.memory[s] as char);
-                s += 1;
-            }
-            println!();
-        }
-        else {
-            let pc = self.pc as u16;
-            self.push(pc + 2);
-            self.pc = usize::from(addr);
-        }
+    pub fn call(&mut self, addr: u16) {
+        let pc = self.pc as u16;
+        self.push(pc + 2);
+        self.pc = usize::from(addr);
     }
 
     fn call_if(&mut self, cond: bool) {
@@ -293,12 +858,176 @@ impl<T: InOutHandler> State8080<T> {
             self.pc += 2;
         }
     }
+
+    fn call_instr(&mut self, op: u8) -> usize {
+        if self.get_flag(op) {
+            self.call(self.word());
+            0
+        } else {
+            2
+        }
+    }
+
+    fn ret_instr(&mut self, op: u8) -> usize {
+        if self.get_flag(op) {
+            self.ret();
+        }
+        0
+    }
+
+    fn jmp_instr(&mut self, op: u8) -> usize {
+        if self.get_flag(op) {
+            self.pc = self.word() as usize;
+            0
+        } else {
+            2
+        }
+    }
+
+    fn lxi(&mut self, op: u8) -> usize {
+        self.set_long(op, (self.byte1(), self.byte2()));
+        2
+    }
+
+    fn ldax(&mut self, op: u8) -> usize {
+        let addr = self.get_long(op);
+        self.a = self.memory[addr];
+        0
+    }
+
+    fn stax(&mut self, op: u8) -> usize {
+        let addr = self.get_long(op);
+        self.memory[addr] = self.a;
+        0
+    }
+
+    fn inx(&mut self, op: u8) -> usize {
+        let val = self.get_long(op) + 1;
+        self.set_long(op, (val as u8, (val >> 8) as u8));
+        0
+    }
+
+    fn inr(&mut self, op: u8) -> usize {
+        let reg = (op >> 3) & 7;
+        let Wrapping(val) = Wrapping(self.get_register(reg)) + Wrapping(1);
+        self.set_register(reg, val);
+        0
+    }
+
+    fn dcr(&mut self, op: u8) -> usize {
+        let reg = (op >> 3) & 7;
+        let Wrapping(val) = Wrapping(self.get_register(reg)) - Wrapping(1);
+        self.set_register(reg, val);
+        0
+    }
+
+    fn mvi(&mut self, op: u8) -> usize {
+        let reg = (op >> 3) & 7;
+        self.set_register(reg, self.byte1());
+        1
+    }
+
+    fn dad(&mut self, op: u8) -> usize {
+        let Wrapping(val) = Wrapping(self.hl()) + Wrapping(self.get_long(op));
+        self.set_long(0x20, (val as u8, (val >> 8) as u8));
+        self.fl.cy = val > 0xFFFF;
+        0
+    }
+
+    fn dcx(&mut self, op: u8) -> usize {
+        let Wrapping(val) = Wrapping(self.get_long(op)) - Wrapping(1);
+        self.set_long(op, (val as u8, (val >> 8) as u8));
+        0
+    }
+
+    fn mov(&mut self, op: u8) -> usize {
+        let src = op & 0b111;
+        let dst = (op >> 3) & 0b111;
+        let val = self.get_register(src);
+        self.set_register(dst, val);
+        0
+    }
+
+    fn add_instr(&mut self, op: u8) -> usize {
+        let src = op & 0b111;
+        let val = u16::from(self.get_register(src)) + u16::from(self.a);
+        self.set_flags(val);
+        self.a = val as u8;
+        0
+    }
+
+    fn adc_instr(&mut self, op: u8) -> usize {
+        let val = self.get_register(op & 0b111);
+        let mut cy = if self.fl.cy { 1u8 } else { 0u8 };
+        self.add(val);
+        if self.fl.cy {
+            cy += 1
+        };
+        self.add(cy);
+        0
+    }
+
+    fn sub_instr(&mut self, op: u8) -> usize {
+        let val = self.get_register(op & 0b111);
+        self.sub(val);
+        0
+    }
+
+    fn sbb_instr(&mut self, op: u8) -> usize {
+        let val = self.get_register(op & 0b111);
+        let carry = Wrapping(if self.fl.cy { 1u8 } else { 0u8 });
+        let Wrapping(rhs) = Wrapping(val) + carry;
+        self.sub(rhs);
+        0
+    }
+
+    fn and_instr(&mut self, op: u8) -> usize {
+        let val = self.get_register(op & 0b111);
+        self.and(val);
+        0
+    }
+
+    fn xor_instr(&mut self, op: u8) -> usize {
+        let val = self.get_register(op & 0b111);
+        self.xor(val);
+        0
+    }
+
+    fn or_instr(&mut self, op: u8) -> usize {
+        let val = self.get_register(op & 0b111);
+        self.or(val);
+        0
+    }
+
+    fn cmp_instr(&mut self, op: u8) -> usize {
+        let val = self.get_register(op & 0b111);
+        self.cmp(val);
+        0
+    }
+
+    fn pop_instr(&mut self, op: u8) -> usize {
+        let val = self.pop();
+        self.set_long(op, (val as u8, (val >> 8) as u8));
+        0
+    }
+
+    fn push_instr(&mut self, op: u8) -> usize {
+        let val = self.get_long(op);
+        self.push(val as u16);
+        0
+    }
+
+    fn rst(&mut self, op: u8) -> usize {
+        let num = (op >> 3) & 0b111;
+        self.generate_interrupt(num);
+        0
+    }
 }
 
 fn disassemble8080_op(codebuffer: &[u8], pc: usize) -> usize {
     let code = &codebuffer[pc..];
     let mut opbytes = 1;
-    print!("{:04X} ", pc);
+    print!("{:04X} {:02X} ", pc, code[0]);
     match code[0] {
         0x00 => print!("NOP"),
         0x01 => {
@@ -393,7 +1122,7 @@ fn disassemble8080_op(codebuffer: &[u8], pc: usize) -> usize {
             opbytes = 3;
         }
         0x32 => {
-            print!("SHLD   ${:02X}{:02X}", code[2], code[1]);
+            print!("STA   ${:02X}{:02X}", code[2], code[1]);
             opbytes = 3;
         }
         0x33 => print!("INX  SP"),
@@ -625,7 +1354,7 @@ fn disassemble8080_op(codebuffer: &[u8], pc: usize) -> usize {
         }
         0xdb => {
             print!("IN     #${:02X}{:02X}", code[2], code[1]);
-            opbytes = 3;
+            opbytes = 2;
         }
         0xdc => {
             print!("CC     ${:02X}{:02X}", code[2], code[1]);
@@ -732,452 +1461,18 @@ pub fn emulate8080<T: InOutHandler>(state: &mut State8080<T>, dis: bool) -> i32 
     let ans8: u8;
     let ans32: u32;
     let addr: usize;
-    if dis { disassemble8080_op(&state.memory, state.pc); }
+    if dis {
+        disassemble8080_op(&state.memory, state.pc);
+    }
+
     state.pc += 1;
-    match opcode {
-        0x00 => {}, // NOP
-        0x01 => { // LXI B,#$WORD
-            state.c = state.byte1();
-            state.b = state.byte2();
-            state.pc += 2;
-        },
-        0x02 => { // STAX B
-            let addr = state.bc();
-            state.memory[addr] = state.a;
-        },
-        0x03 => { // INX B
-            ans = (state.bc() + 1) as u16;
-            state.b = (ans >> 8) as u8;
-            state.c = (ans & 0xff) as u8;
-        },
-        0x04 => { // INR B
-            state.b += 1;
-            state.fl.z = state.b == 0;
-            state.fl.s = (state.b & 0x7f) != 0;
-            state.fl.p = (state.b & 1) == 0;
-        },
-        0x05 => { // DCR B
-            let Wrapping(b) = Wrapping(state.b) - Wrapping(1);
-            state.b = b;
-            state.fl.z = state.b == 0;
-            state.fl.s = (state.b & 0x7f) != 0;
-            state.fl.p = (state.b & 1) == 0;
-        },
-        0x06 => { // MVI B,#$BYTE
-            state.b = state.byte1();
-            state.pc += 1;
-        },
-        0x07 => { // RLC
-            ans8 = state.a >> 7;
-            state.a = (state.a << 1) | ans8;
-            state.fl.cy = ans8 == 1;
-        },
-
-        0x08 => {}, // NOP
-        0x09 => { //DAD B
-            let ans32: u32 = (state.hl() as u32) + (state.bc() as u32);
-            state.h = ((ans32 >> 8) & 0xff) as u8;
-            state.l = (ans32 & 0xff) as u8;
-            state.fl.cy = ans32 > 0xffff
-        },
-        0x0a => {state.a = state.at_bc();}, // LDAX B
-        0x0b => { // DCX C
-            ans = (state.bc() - 1) as u16;
-            state.b = (ans >> 8) as u8;
-            state.c = (ans & 0xff) as u8;
-        },
-        0x0c => { // INR C
-            state.c += 1;
-            ans8 = state.c;
-            state.set_r(ans8);
-        },
-        0x0d => { // DCR C
-            let Wrapping(c) = Wrapping(state.c) - Wrapping(1);
-            state.c = c;
-            ans8 = state.c;
-            state.set_r(ans8);
-        },
-        0x0e => { // MVI C,#$BYTE
-            state.c = state.byte1();
-            state.pc += 1;
-        },
-        0x0f => { // RRC
-            ans8 = state.a << 7;
-            state.a = (state.a >> 1) | ans8;
-            state.fl.cy = ans8 > 0;
-        },
-
-        0x10 => {}, // NOP
-        0x11 => { // LXI B,#$WORD
-            state.e = state.byte1();
-            state.d = state.byte2();
-            state.pc += 2;
-        },
-        0x12 => {let addr = state.de(); state.memory[addr] = state.a}, // // STAX D
-        0x13 => { // INX D
-            ans = (state.de() + 1) as u16;
-            state.d = (ans >> 8) as u8;
-            state.e = (ans & 0xff) as u8;
-        },
-        0x14 => { // INR D
-            state.d += 1;
-            ans8 = state.d;
-            state.set_r(ans8);
-        },
-        0x15 => { // DRC D
-            let Wrapping(d) = Wrapping(state.d) - Wrapping(1);
-            state.d = d;
-            ans8 = state.d;
-            state.set_r(ans8)
-        },
-        0x16 => { //MVI D,#$BYTE
-            state.d = state.byte1();
-            state.pc += 1;
-        },
-        0x17 => { // RAL
-            let prev_carry = if state.fl.cy { 1 } else { 0 };
-            state.fl.cy = (state.a >> 7) == 1;
-            state.a = (state.a << 1) | prev_carry;
-        },
-
-        0x18 => {}, // NOP
-        0x19 => { //DAD D
-            ans32 = (state.hl() as u32) + (state.de() as u32);
-            state.h = ((ans32 >> 8) & 0xff) as u8;
-            state.l = (ans32 & 0xff) as u8;
-            state.fl.cy = ans32 > 0xffff
-        },
-        0x1a => {state.a = state.at_de();}, // LDAX D
-        0x1b => { // DCX D
-            ans = (state.de() - 1) as u16;
-            state.d = (ans >> 8) as u8;
-            state.e = (ans & 0xff) as u8;
-        },
-        0x1c => { // INR E
-            state.e += 1;
-            ans8 = state.e;
-            state.set_r(ans8);
-        },
-        0x1d => { // DCR E
-            let Wrapping(e) = Wrapping(state.e) - Wrapping(1);
-            state.e = e;
-            ans8 = state.e;
-            state.set_r(ans8);
-        },
-        0x1e => { // MVI E,#$BYTE
-            state.e = state.byte1();
-            state.pc += 1;
-        },
-        0x1f => { // RAR
-            let prev_carry = if state.fl.cy { 1 } else { 0 };
-            state.fl.cy = (state.a & 1) == 1;
-            state.a = (state.a >> 1) | prev_carry;
-        },
-
-        0x20 => {}, // RIM
-        0x21 => { // LXI H,#$WORD
-            state.h = state.byte2();
-            state.l = state.byte1();
-            state.pc += 2;
-        },
-        0x22 => { // SHLD $WORD
-            ans = state.word();
-            state.memory[usize::from(ans)] = state.l;
-            state.memory[usize::from(ans + 1)] = state.h;
-            state.pc += 2;
-        },
-        0x23 => { // INX H
-            ans = (state.hl() + 1) as u16;
-            state.h = (ans >> 8) as u8;
-            state.l = (ans & 0xff) as u8;
-        },
-        0x24 => { // INR H
-            state.h += 1;
-            ans8 = state.h;
-            state.set_r(ans8);
-        },
-        0x25 => { // DCR H
-            let Wrapping(h) = Wrapping(state.h) - Wrapping(1);
-            state.h = h;
-            ans8 = state.h;
-            state.set_r(ans8);
-        },
-        0x26 => { // MVI L,#$BYTE
-            state.h = state.byte1();
-            state.pc += 1;
-        },
-        0x27 => {}, // RAA
-
-        0x28 => {}, // NOP
-        0x29 => { //DAD H
-            let ans32: u32 = (state.hl() as u32) + (state.hl() as u32);
-            state.h = ((ans32 >> 8) & 0xff) as u8;
-            state.l = (ans32 & 0xff) as u8;
-            state.fl.cy = ans32 > 0xffff
-        },
-        0x2a => { // LHDL $WORD
-            ans = state.word();
-            state.l = state.memory[usize::from(ans)];
-            state.h = state.memory[usize::from(ans + 1)];
-            state.pc += 2;
-        },
-        0x2b => { // DCX H
-            ans = (state.hl() - 1) as u16;
-            state.h = (ans >> 8) as u8;
-            state.l = (ans & 0xff) as u8;
-        },
-        0x2c => { // INR L
-            state.l += 1;
-            ans8 = state.l;
-            state.set_r(ans8);
-        },
-        0x2d => { // DCR L
-            let Wrapping(l) = Wrapping(state.l) - Wrapping(1);
-            state.l = l;
-            ans8 = state.l;
-            state.set_r(ans8);
-        },
-        0x2e => { // MVI L,#$BYTE
-            state.l = state.byte1();
-            state.pc += 1;
-        },
-        0x2f => { // CMA
-            state.a = !state.a;
-        },
-
-        0x30 => {}, // NOP
-        0x31 => { // LXI SP,#$WORD
-            state.sp = usize::from(state.word());
-            state.pc += 2;
-        },
-        0x32 => { // STA $WORD
-            ans = state.word();
-            state.memory[usize::from(ans)] = state.a;
-            state.pc += 2;
-        },
-        0x33 => { // INX SP
-            state.sp = (state.sp + 1) & 0xffff;
-        },
-        0x34 => { // INR M
-            addr = state.hl();
-            ans8 = state.memory[addr] + 1;
-            state.memory[addr] = ans8;
-            state.set_r(ans8);
-        },
-        0x35 => { // DCR M
-            addr = state.hl();
-            ans8 = state.memory[addr] - 1;
-            state.memory[addr] = ans8;
-            state.set_r(ans8);
-        },
-        0x36 => { //MVI M,#$BYTE
-            addr = state.hl();
-            state.memory[addr] = state.byte1();
-            state.pc += 1;
-        },
-        0x37 => { // STC
-            state.fl.cy = true;
-        },
-
-        0x38 => {}, // NOP
-        0x39 => { // DAD SP
-            ans32 = (state.hl() as u32) + (state.sp as u32);
-            state.h = ((ans32 >> 8) & 0xff) as u8;
-            state.l = (ans32 & 0xff) as u8;
-            state.fl.cy = ans32 > 0xffff;
-        },
-        0x3a => { // LDA $WORD
-            addr = usize::from(state.word());
-            state.a = state.memory[addr];
-            state.pc += 2;
-
-        },
-        0x3b => { // DCX SP
-            ans = (state.sp - 1) as u16;
-            state.sp = usize::from(ans);
-        },
-        0x3c => { // INR A
-            state.a += 1;
-            ans8 = state.a;
-            state.set_r(ans8);
-        },
-        0x3d => { // DCR A
-            let Wrapping(a) = Wrapping(state.a) - Wrapping(1);
-            state.a = a;
-            ans8 = state.a;
-            state.set_r(ans8);
-        },
-        0x3e => { // MVI A,#$BYTE
-            state.a = state.byte1();
-            state.pc += 1;
-        },
-        0x3f => { // CMA
-            state.fl.cy = !state.fl.cy;
-        },
-
-        op @ 0x40..=0x7F => { // MOV DST,SRC
-            let src = op & 0b111;
-            let dst = (op >> 3) & 0b111;
-            let val = state.get_register(src);
-            state.set_register(dst, val);
-        },
-
-        op @ 0x80..=0x87 => { // ADD REG
-            let src = op & 0b111;
-            state.add_op(src);
-        },
-
-        op @ 0x88..=0x8F => { // ADC REG
-            let val = state.get_register(op & 0b111);
-            state.adc(val);
-        },
-
-        op @ 0x90..=0x97 => { // SUB REG
-            let val = state.get_register(op & 0b111);
-            state.sub(val);
-        },
-
-        op @ 0x98..=0x9F => { // SBB REG
-            let val = state.get_register(op & 0b111);
-            state.sbb(val);
-        },
-
-        op @ 0xA0..=0xA7 => { // AND REG
-            let val = state.get_register(op & 0b111);
-            state.and(val);
-        },
-
-        op @ 0xA8..=0xAF => { // XOR REG
-            let val = state.get_register(op & 0b111);
-            state.xor(val);
-        },
-
-        op @ 0xB0..=0xB7 => { // OR REG
-            let val = state.get_register(op & 0b111);
-            state.or(val);
-        },
-
-        op @ 0xB8..=0xBF => { // CMP REG
-            let val = state.get_register(op & 0b111);
-            state.cmp(val);
-        },
-
-        0xc0 => {if !state.fl.z {state.ret()}}, // RNZ
-        0xc1 => { // POP B
-            ans = state.pop();
-            state.b = (ans >> 8) as u8;
-            state.c = (ans & 0xff) as u8;
-        },
-        0xc2 => {if !state.fl.z {state.pc = usize::from(state.word())} else {state.pc += 2}}, // JNZ
-        0xc3 => {state.pc = usize::from(state.word());}, // JMP
-        0xc4 => { // CNZ $WORD
-            state.call_if(!state.fl.z)
-        },
-        0xc5 => {ans = state.bc() as u16; state.push(ans)} //PUSH  B,
-        0xc6 => {ans8 = state.byte1(); state.add(ans8); state.pc += 1;}, // ADI #$BYTE
-        0xc7 => {state.unimplemented_instruction()}, // RST 0
-        0xc8 => {if state.fl.z {state.ret()}}, // RZ
-        0xc9 => {state.ret()}, // RET
-        0xca => {if state.fl.z {state.pc = usize::from(state.word())} else { state.pc += 2 }}, // JZ
-        0xcb => {}, // NOP
-        0xcc => {state.call_if(state.fl.z)}, // CZ
-        0xcd => {ans = state.word(); state.call(ans)}, // CALL $WORD
-        0xce => {ans8 = state.byte1(); state.adc(ans8); state.pc += 1;}, // ACI #$BYTE
-        0xcf => {state.generate_interrupt(1);}, // RST 1
-
-        0xd0 => {if !state.fl.cy {state.ret()}}, // RNC
-        0xd1 => { // POP D
-            ans = state.pop();
-            state.d = (ans >> 8) as u8;
-            state.e = (ans & 0xff) as u8;
-        },
-        0xd2 => {if !state.fl.cy {state.pc = usize::from(state.word())} else {state.pc += 2}}, // JNC
-        0xd3 => {state.pc += 1}, // OUT
-        0xd4 => {state.call_if(!state.fl.cy)}, // CNC
-        0xd5 => {ans = state.de() as u16; state.push(ans)} //PUSH  D
-        0xd6 => {ans8 = state.byte1(); state.sub(ans8); state.pc += 1;}, // SUI #$BYTE
-        0xd7 => {state.unimplemented_instruction()}, // RST 2
-        0xd8 => {if state.fl.cy {state.ret()}}, // RC
-        0xd9 => {}, // NOP
-        0xda => {if state.fl.cy {state.pc = usize::from(state.word())} else {state.pc += 2}}, // JC
-        0xdb => {state.pc += 1}, // IN
-        0xdc => {state.call_if(state.fl.cy)}, // CC
-        0xdd => {ans = state.word(); state.call(ans)}, // CALL
-        0xde => {ans8 = state.byte1(); state.sbb(ans8); state.pc += 1;}, // SBI #$BYTE
-        0xdf => {state.unimplemented_instruction()}, // RST 3
-
-        0xe0 => {if !state.fl.p {state.ret()}}, // RPO
-        0xe1 => { // POP H
-            ans = state.pop();
-            state.h = (ans >> 8) as u8;
-            state.l = (ans & 0xff) as u8;
-        },
-        0xe2 => {if !state.fl.p {state.pc = usize::from(state.word())} else {state.pc += 2}}, // JPO
-        0xe3 => { // XTHL
-            ans = state.pop();
-            let temp = state.hl() as u16;
-            state.push(temp);
-            state.h = (ans >> 8) as u8;
-            state.l = (ans & 0xff) as u8;
-        },
-        0xe4 => {state.call_if(!state.fl.p)}, // CPO
-        0xe5 => {ans = state.hl() as u16; state.push(ans)} //PUSH  H
-        0xe6 => {ans8 = state.byte1(); state.and(ans8); state.pc += 1;}, // ANI #$BYTE
-        0xe7 => {state.unimplemented_instruction()}, // RST 4
-        0xe8 => {if state.fl.p {state.ret()}}, // RPE
-        0xe9 => { // PCHL
-            state.pc = (usize::from(state.h) << 8) | usize::from(state.l);
-        },
-        0xea => {if state.fl.p {state.pc = usize::from(state.word())} else {state.pc += 2}}, // JPE
-        0xeb => { // XCHG
-            std::mem::swap(&mut state.d, &mut state.h);
-            std::mem::swap(&mut state.e, &mut state.l);
-        },
-        0xec => {state.call_if(state.fl.p)}, // CPE
-        0xed => {}, // NOP
-        0xee => {ans8 = state.byte1(); state.xor(ans8); state.pc += 1;}, // XRI #$BYTE
-        0xef => {state.unimplemented_instruction()}, // RST 4
-
-        0xf0 => {if !state.fl.s {state.ret()}}, // RP
-        0xf1 => { // POP PSW
-            ans = state.pop();
-            state.a = (ans >> 8) as u8;
-            state.fl.s = ans & 0x80 > 0;
-            state.fl.z = ans & 0x40 > 0;
-            state.fl.ac = ans & 0x10 > 0;
-            state.fl.p = ans & 0x04 > 0;
-            state.fl.cy = ans & 0x01 > 0;
-        },
-        0xf2 => {if !state.fl.s {state.pc = usize::from(state.word())} else {state.pc += 2}}, // true
-        0xf3 => {state.int_enable = false}, // DI
-        0xf4 => {state.call_if(!state.fl.s)}, // CP
-        0xf5 => { // PUSH PWS
-            ans = u16::from(state.a) << 8;
-            if state.fl.s {ans |= 0x80};
-            if state.fl.z {ans |= 0x40};
-            if state.fl.ac {ans |= 0x10};
-            if state.fl.p {ans |= 0x04};
-            if state.fl.cy {ans |= 0x01};
-            state.push(ans);
-        },
-        0xf6 => {ans8 = state.byte1(); state.or(ans8); state.pc += 1;}, // ANI #$BYTE
-        0xf7 => {state.unimplemented_instruction()}, // RST 6
-        0xf8 => {if state.fl.s { state.ret() }}, // RM
-        0xf9 => {state.sp = state.hl()}, // SPHL
-        0xfa => {if state.fl.s { state.pc = usize::from(state.word()); } else { state.pc += 2 }}, // JM
-        0xfb => {state.int_enable = true}, // EI
-        0xfc => {state.call_if(state.fl.s)}, // CM
-        0xfd => {ans = state.word(); state.call(ans)}, // CALL
-        0xfe => {ans8 = state.byte1(); state.cmp(ans8); state.pc += 1;}, // CPI #$BYTE
-        0xff => {state.unimplemented_instruction()}, // RST 7
-
-        _ => {}
-    };
+    let func = state.instructions[opcode as usize];
+    state.pc += func(state, opcode);
 
     if dis {
         println!(
-            "Registers: A: {:02X} BC: {:02X}{:02X} DE: {:02X}{:02X} HL: {:02X}{:02X}",
-            state.a, state.b, state.c, state.d, state.e, state.h, state.l
+            "Registers: A: {:02X} BC: {:02X}{:02X} DE: {:02X}{:02X} HL: {:02X}{:02X}, SP: {:02X}",
+            state.a, state.b, state.c, state.d, state.e, state.h, state.l, state.sp,
         );
         println!(
             "Flags: s: {} z: {} p: {} cy: {}",
