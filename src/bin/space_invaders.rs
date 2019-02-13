@@ -66,15 +66,10 @@ fn main() {
         eprintln!("Usage: {} rom", args().next().unwrap());
         std::process::exit(1);
     }
-    //state.read_file_in_memory_at("invaders.h", 0).unwrap();
-    //state.read_file_in_memory_at("invaders.g", 0x800).unwrap();
-    //state.read_file_in_memory_at("invaders.f", 0x1000).unwrap();
-    //state.read_file_in_memory_at("invaders.e", 0x1800).unwrap();
 
     let mut done = 0;
-    // let mut n: u64 = 0;
+    let mut n: u64 = 0;
     let mut last_interrupt = time::SystemTime::now();
-    // let mut framecount: usize = 0;
     let interrupt_delay = time::Duration::new(1, 0).checked_div(60).unwrap();
     let sdl_context = sdl2::init().unwrap();
     let video_subsystem = sdl_context.video().unwrap();
@@ -84,8 +79,9 @@ fn main() {
         .build()
         .unwrap();
     let mut canvas = window.into_canvas().build().unwrap();
-    canvas.set_draw_color(Color::RGB(0, 0, 0));
+    canvas.set_draw_color(Color::RGB(255, 255, 255));
     canvas.clear();
+    canvas.present();
     let mut event_pump = sdl_context.event_pump().unwrap();
     while done == 0 {
         for event in event_pump.poll_iter() {
@@ -114,11 +110,9 @@ fn main() {
             canvas.present();
             state.generate_interrupt(2);
             last_interrupt = time::SystemTime::now();
-            // framecount += 1;
         }
-        // print!("#{} ", n);
-        // n += 1;
-        done = emulate8080(&mut state, false);
-        // thread::sleep(time::Duration::from_millis(1000));
+        print!("#{} ", n);
+        n += 1;
+        done = emulate8080(&mut state, true);
     }
 }

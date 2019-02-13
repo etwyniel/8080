@@ -91,7 +91,7 @@ impl<T: InOutHandler> State8080<T> {
             l: 0,
             sp: 0,
             pc: 0,
-            memory: vec![0; 0x10000],
+            memory: vec![0xFF; 0x10000],
             fl: Flags {
                 z: false,
                 s: false,
@@ -605,13 +605,32 @@ impl<T: InOutHandler> State8080<T> {
 
     fn pop_instr(&mut self, op: u8) -> usize {
         let val = self.pop();
-        self.set_long(op, (val as u8, (val >> 8) as u8));
+        if op ==  0xf1 { // POP PSW
+            self.a = (val >> 8) as u8;
+            self.fl.s = val & 0x80 > 0;
+            self.fl.z = val & 0x40 > 0;
+            self.fl.ac = val & 0x10 > 0;
+            self.fl.p = val & 0x04 > 0;
+            self.fl.cy = val & 0x01 > 0;
+        } else {
+            self.set_long(op, (val as u8, (val >> 8) as u8));
+        }
         0
     }
 
     fn push_instr(&mut self, op: u8) -> usize {
-        let val = self.get_long(op);
-        self.push(val as u16);
+        let mut val = 0;
+        if op == 0xf5 { // PUSH PSW
+            val = u16::from(self.a) << 8;
+            if self.fl.s {val |= 0x80};
+            if self.fl.z {val |= 0x40};
+            if self.fl.ac {val |= 0x10};
+            if self.fl.p {val |= 0x04};
+            if self.fl.cy {val |= 0x01};
+        } else {
+            val = self.get_long(op) as u16;
+        }
+        self.push(val);
         0
     }
 
