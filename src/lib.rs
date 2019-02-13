@@ -74,7 +74,9 @@ pub struct State8080<T: InOutHandler> {
     pub fl: Flags,
     pub int_enable: bool,
     pub io: T,
-    pub instructions: [Instruction<T>; 256],
+    pub assignments: [Instruction<T>; 16],
+    pub branching: [Instruction<T>; 16],
+    pub instr_compact: [Instruction<T>; 32],
 }
 
 impl<T: InOutHandler> State8080<T> {
@@ -99,526 +101,115 @@ impl<T: InOutHandler> State8080<T> {
             },
             int_enable: false,
             io: io_handler,
-            instructions: [
+            assignments: [
                 // NOP
-                |_state, _op| 0, // 0x00
-                // LXI B,#$WORD
-                Self::lxi, // 0x01
-                // STAX B
-                Self::stax, // 0x02
-                // INX B
-                Self::inx, // 0x03
-                // INR B
-                Self::inr, // 0x04
-                // DCR B
-                Self::dcr, // 0x05
-                // MVI B,#$BYTE
-                Self::mvi, // 0x06
-                // RLC
-                |_state, _op| {
-                    let bit = _state.a >> 7;
-                    _state.a = (_state.a << 1) | bit;
-                    _state.fl.cy = bit == 1;
-                    0
-                }, // 0x07
+                |_, _| 0,               // 0x0
+                Self::lxi,              // 0x1
+                Self::stax,             // 0x2
+                Self::inx,              // 0x3
+                Self::inr,              // 0x4
+                Self::dcr,              // 0x5
+                Self::mvi,              // 0x6
+                Self::assignment_extra, // 0x7
                 // NOP
-                |_state, _op| 0, // 0x08
-                // DAD B
-                Self::dad, // 0x09
-                // LDAX B
-                Self::ldax, // 0x0a
-                // DCX B
-                Self::dcx, // 0x0b
-                // INR C
-                Self::inr, // 0x0c
-                // DCR C
-                Self::dcr, // 0x0d
-                // MVI C,#$BYTE
-                Self::mvi, // 0x0e
-                // RRC
-                |_state, _op| {
-                    let bit = _state.a << 7;
-                    _state.a = (_state.a >> 1) | bit;
-                    _state.fl.cy = bit > 0;
-                    0
-                }, // 0x0f
-                // NOP
-                |_state, _op| 0, // 0x10
-                // LXI D,#$WORD
-                Self::lxi, // 0x11
-                // STAX D
-                Self::stax, // 0x12
-                // INX D
-                Self::inx, // 0x13
-                // INR D
-                Self::inr, // 0x14
-                // DCR D
-                Self::dcr, // 0x15
-                // MVI D,#$BYTE
-                Self::mvi, // 0x16
-                // RAL
-                |_state, _op| {
-                    let prev_carry = if _state.fl.cy { 1 } else { 0 };
-                    _state.fl.cy = (_state.a >> 7) == 1;
-                    _state.a = (_state.a << 1) | prev_carry;
-                    0
-                }, // 0x17
-                // NOP
-                |_state, _op| 0, // 0x18
-                // DAD D
-                Self::dad, // 0x19
-                // LDAX D
-                Self::ldax, // 0x1a
-                // DCX D
-                Self::dcx, // 0x1b
-                // INR E
-                Self::inr, // 0x1c
-                // DCR E
-                Self::dcr, // 0x1d
-                // MVI E,#$BYTE
-                Self::mvi, // 0x1e
-                // RAR
-                |_state, _op| {
-                    // RAR
-                    let prev_carry = if _state.fl.cy { 1 } else { 0 };
-                    _state.fl.cy = (_state.a & 1) == 1;
-                    _state.a = (_state.a >> 1) | prev_carry;
-                    0
-                }, // 0x1f
-                // RIM
-                |_state, _op| 0, // 0x20
-                // LXI H,#$WORD
-                Self::lxi, // 0x21
-                // SHLD $WORD
-                |_state, _op| {
-                    let val = _state.word();
-                    _state.memory[usize::from(val)] = _state.l;
-                    _state.memory[usize::from(val + 1)] = _state.h;
-                    2
-                }, // 0x22
-                // INX H
-                Self::inx, // 0x23
-                // INR H
-                Self::inr, // 0x24
-                // DCR H
-                Self::dcr, // 0x25
-                // MVI L,#$BYTE
-                Self::mvi, // 0x26
-                // RAA
-                |_state, _op| 0, // 0x27
-                // NOP
-                |_state, _op| 0, // 0x28
-                // DAD H
-                Self::dad, // 0x29
-                // LHLD $WORD
-                |_state, _op| {
-                    let addr = _state.word();
-                    _state.l = _state.memory[usize::from(addr)];
-                    _state.h = _state.memory[usize::from(addr + 1)];
-                    2
-                }, // 0x2a
-                // DCX H
-                Self::dcx, // 0x2b
-                // INR L
-                Self::inr, // 0x2c
-                //DCR L
-                Self::dcr, // 0x2d
-                // MVI L,#$BYTE
-                Self::mvi, // 0x2e
-                // CMA
-                |_state, _op| {
-                    _state.a = !_state.a;
-                    0
-                }, // 0x2f
-                // NOP
-                |_state, _op| 0, // 0x30
-                // LXI SP,#$WORD
-                Self::lxi, // 0x31
-                // STA $WORD
-                |_state, _op| {
-                    let addr = _state.word();
-                    _state.memory[usize::from(addr)] = _state.a;
-                    2
-                }, // 0x32
-                // INX SP
-                Self::inx, // 0x33
-                // INR M
-                Self::inr, // 0x34
-                // DCR M
-                Self::dcr, // 0x35
-                // MVI M,#$BYTE
-                Self::mvi, // 0x36
-                // STC
-                |_state, _op| {
-                    _state.fl.cy = true;
-                    0
-                }, // 0x37
-                // NOP
-                |_state, _op| 0, // 0x38
-                // DAD SP
-                Self::dad, // 0x39
-                // LDA $WORD
-                |_state, _op| {
-                    let addr = usize::from(_state.word());
-                    _state.a = _state.memory[addr];
-                    2
-                }, // 0x3a
-                // DCX SP
-                Self::dcx, // 0x3b
-                // INR A
-                Self::inr, // 0x3c
-                // DCR A
-                Self::dcr, // 0x3d
-                // MVI A,#$BYTE
-                Self::mvi, // 0x3e
-                // CMC
-                |_state, _op| {
-                    _state.fl.cy = !_state.fl.cy;
-                    0
-                }, // 0x3f
-                // MOV DST,SRC
-                Self::mov, // 0x40
-                Self::mov, // 0x41
-                Self::mov, // 0x42
-                Self::mov, // 0x43
-                Self::mov, // 0x44
-                Self::mov, // 0x45
-                Self::mov, // 0x46
-                Self::mov, // 0x47
-                Self::mov, // 0x48
-                Self::mov, // 0x49
-                Self::mov, // 0x4a
-                Self::mov, // 0x4b
-                Self::mov, // 0x4c
-                Self::mov, // 0x4d
-                Self::mov, // 0x4e
-                Self::mov, // 0x4f
-                Self::mov, // 0x50
-                Self::mov, // 0x51
-                Self::mov, // 0x52
-                Self::mov, // 0x53
-                Self::mov, // 0x54
-                Self::mov, // 0x55
-                Self::mov, // 0x56
-                Self::mov, // 0x57
-                Self::mov, // 0x58
-                Self::mov, // 0x59
-                Self::mov, // 0x5a
-                Self::mov, // 0x5b
-                Self::mov, // 0x5c
-                Self::mov, // 0x5d
-                Self::mov, // 0x5e
-                Self::mov, // 0x5f
-                Self::mov, // 0x60
-                Self::mov, // 0x61
-                Self::mov, // 0x62
-                Self::mov, // 0x63
-                Self::mov, // 0x64
-                Self::mov, // 0x65
-                Self::mov, // 0x66
-                Self::mov, // 0x67
-                Self::mov, // 0x68
-                Self::mov, // 0x69
-                Self::mov, // 0x6a
-                Self::mov, // 0x6b
-                Self::mov, // 0x6c
-                Self::mov, // 0x6d
-                Self::mov, // 0x6e
-                Self::mov, // 0x6f
-                Self::mov, // 0x70
-                Self::mov, // 0x71
-                Self::mov, // 0x72
-                Self::mov, // 0x73
-                Self::mov, // 0x74
-                Self::mov, // 0x75
-                Self::mov, // 0x76
-                Self::mov, // 0x77
-                Self::mov, // 0x78
-                Self::mov, // 0x79
-                Self::mov, // 0x7a
-                Self::mov, // 0x7b
-                Self::mov, // 0x7c
-                Self::mov, // 0x7d
-                Self::mov, // 0x7e
-                Self::mov, // 0x7f
-                // ADD REG
-                Self::add_instr, // 0x80
-                Self::add_instr, // 0x81
-                Self::add_instr, // 0x82
-                Self::add_instr, // 0x83
-                Self::add_instr, // 0x84
-                Self::add_instr, // 0x85
-                Self::add_instr, // 0x86
-                Self::add_instr, // 0x87
-                // ADC REG
-                Self::adc_instr, // 0x88
-                Self::adc_instr, // 0x89
-                Self::adc_instr, // 0x8a
-                Self::adc_instr, // 0x8b
-                Self::adc_instr, // 0x8c
-                Self::adc_instr, // 0x8d
-                Self::adc_instr, // 0x8e
-                Self::adc_instr, // 0x8f
-                // SUB REG
-                Self::sub_instr, // 0x90
-                Self::sub_instr, // 0x91
-                Self::sub_instr, // 0x92
-                Self::sub_instr, // 0x93
-                Self::sub_instr, // 0x94
-                Self::sub_instr, // 0x95
-                Self::sub_instr, // 0x96
-                Self::sub_instr, // 0x97
-                // SBB REG
-                Self::sbb_instr, // 0x98
-                Self::sbb_instr, // 0x99
-                Self::sbb_instr, // 0x9a
-                Self::sbb_instr, // 0x9b
-                Self::sbb_instr, // 0x9c
-                Self::sbb_instr, // 0x9d
-                Self::sbb_instr, // 0x9e
-                Self::sbb_instr, // 0x9f
-                // AND REG
-                Self::and_instr, // 0xa0
-                Self::and_instr, // 0xa1
-                Self::and_instr, // 0xa2
-                Self::and_instr, // 0xa3
-                Self::and_instr, // 0xa4
-                Self::and_instr, // 0xa5
-                Self::and_instr, // 0xa6
-                Self::and_instr, // 0xa7
-                // XOR REG
-                Self::xor_instr, // 0xa8
-                Self::xor_instr, // 0xa9
-                Self::xor_instr, // 0xaa
-                Self::xor_instr, // 0xab
-                Self::xor_instr, // 0xac
-                Self::xor_instr, // 0xad
-                Self::xor_instr, // 0xae
-                Self::xor_instr, // 0xaf
-                // OR REG
-                Self::or_instr, // 0xb0
-                Self::or_instr, // 0xb1
-                Self::or_instr, // 0xb2
-                Self::or_instr, // 0xb3
-                Self::or_instr, // 0xb4
-                Self::or_instr, // 0xb5
-                Self::or_instr, // 0xb6
-                Self::or_instr, // 0xb7
-                // CMP REG
-                Self::cmp_instr, // 0xb8
-                Self::cmp_instr, // 0xb9
-                Self::cmp_instr, // 0xba
-                Self::cmp_instr, // 0xbb
-                Self::cmp_instr, // 0xbc
-                Self::cmp_instr, // 0xbd
-                Self::cmp_instr, // 0xbe
-                Self::cmp_instr, // 0xbf
-                // RNZ
-                Self::ret_instr, // 0xc0
-                // POP B
-                Self::pop_instr, // 0xc1
-                // JNZ
-                Self::jmp_instr, // 0xc2
-                // JMP
-                Self::jmp_instr, // 0xc3
-                // CNZ $WORD
-                Self::call_instr, // 0xc4
-                // PUSH B
-                Self::push_instr, // 0xc5
-                // ADI #$BYTE
-                |_state, _op| {
-                    let val = _state.byte1();
-                    _state.add(val);
-                    1
-                }, // 0xc6
-                // RST 0
-                Self::rst, // 0xc7
-                // RZ
-                Self::ret_instr, // 0xc8
-                // RET
-                Self::ret_instr, // 0xc9
-                // JZ
-                Self::jmp_instr, // 0xca
-                // NOP
-                |_state, _op| 0, // 0xcb
-                // CZ
-                Self::call_instr, // 0xcc
-                // CALL $WORD
-                Self::call_instr, // 0xcd
-                // ACI #$BYTE
-                |_state, _op| {
-                    let val = _state.byte1();
-                    _state.adc(val);
-                    1
-                }, // 0xce
-                // RST
-                Self::rst, // 0xcf
-                // RNC
-                Self::ret_instr, // 0xd0
-                // POP D
-                Self::pop_instr, // 0xd1
-                // JNC
-                Self::jmp_instr, // 0xd2
-                // OUT
-                |_state, _op| {
-                    _state.io.write(_state.byte1(), _state.a);
-                    1
-                }, // 0xd3
-                // CNC
-                Self::call_instr, // 0xd4
-                // PUSH D
-                Self::push_instr, // 0xd5
-                // SUI #$BYTE
-                |_state, _op| {
-                    let val = _state.byte1();
-                    _state.sub(val);
-                    1
-                }, // 0xd6
-                // RST 2
-                Self::rst, // 0xd7
-                // RC
-                Self::ret_instr, // 0xd8
-                // NOP
-                |_state, _op| 0, // 0xd9
-                // JC
-                Self::jmp_instr, // 0xda
-                // IN
-                |_state, _op| {
-                    _state.a = _state.io.read(_state.byte1());
-                    1
-                }, // 0xdb
-                // CC
-                Self::call_instr, // 0xdc
-                // CALL
-                Self::call_instr, // 0xdd
-                // SBI #$BYTE
-                |_state, _op| {
-                    let val = _state.byte1();
-                    _state.sbb(val);
-                    1
-                }, // 0xde
-                // RST 3
-                Self::rst, // 0xdf
-                // RPO
-                Self::ret_instr, // 0xe0
-                // POP H
-                Self::pop_instr, // 0xe1
-                // JPO
-                Self::jmp_instr, // 0xe2
-                // XTHL
-                |_state, _op| {
-                    let val = _state.pop();
-                    _state.push(_state.hl() as u16);
-                    _state.h = (val >> 8) as u8;
-                    _state.l = val as u8;
-                    0
-                }, // 0xe3
-                // CPO
-                Self::call_instr, // 0xe4
-                // PUSH H
-                Self::push_instr, // 0xe5
-                // ANI #$BYTE
-                |_state, _op| {
-                    let val = _state.byte1();
-                    _state.and(val);
-                    1
-                }, // 0xe6
-                // RST 4
-                Self::rst, // 0xe7
-                // RPE
-                Self::ret_instr, // 0xe8
-                // PCHL
-                |_state, _op| {
-                    _state.pc = (usize::from(_state.h) << 8) | usize::from(_state.l);
-                    0
-                }, // 0xe9
-                // JPE
-                Self::jmp_instr, // 0xea
-                // XCHG
-                |_state, _op| {
-                    std::mem::swap(&mut _state.d, &mut _state.h);
-                    std::mem::swap(&mut _state.e, &mut _state.l);
-                    0
-                }, // 0xeb
-                // CPE
-                Self::call_instr, // 0xec
-                // NOP
-                |_state, _op| 0, // 0xed
-                // XRI #$BYTE
-                |_state, _op| {
-                    let val = _state.byte1();
-                    _state.xor(val);
-                    1
-                }, // 0xee
-                // RST 5
-                Self::rst, // 0xef
-                // RP
-                Self::ret_instr, // 0xf0
-                // POP PSW
-                |_state, _op| {
-                    let val = _state.pop();
-                    _state.a = (val >> 8) as u8;
-                    _state.fl.s = val & 0x80 > 0;
-                    _state.fl.z = val & 0x40 > 0;
-                    _state.fl.ac = val & 0x10 > 0;
-                    _state.fl.p = val & 0x04 > 0;
-                    _state.fl.cy = val & 0x01 > 0;
-                    0
-                }, // 0xf1
-                // JP $WORD
-                Self::jmp_instr, // 0xf2
-                // DI
-                |_state, _op| {
-                    _state.int_enable = false;
-                    0
-                }, // 0xf3
-                // CP
-                Self::call_instr, // 0xf4
-                // PUSH PSW
-                |_state, _op| {
-                    let mut val = u16::from(_state.a) << 8;
-                    if _state.fl.s {val |= 0x80};
-                    if _state.fl.z {val |= 0x40};
-                    if _state.fl.ac {val |= 0x10};
-                    if _state.fl.p {val |= 0x04};
-                    if _state.fl.cy {val |= 0x01};
-                    _state.push(val);
-                    0
-                }, // 0xf5
-                // ORI #$BYTE
-                |_state, _op| {
-                    let val = _state.byte1();
-                    _state.or(val);
-                    1
-                }, // 0xf6
-                // RST 6
-                Self::rst, // 0xf7
-                // RM
-                Self::ret_instr, // 0xf8
-                // SPHL
-                |_state, _op| {
-                    _state.sp = _state.hl();
-                    0
-                }, // 0xf9
-                // JM
-                Self::jmp_instr, // 0xfa
-                |_state, _op| {
-                    _state.int_enable = true;
-                    0
-                }, // 0xfb
-                // CM
-                Self::call_instr, // 0xfc
-                // CALL
-                Self::call_instr, // 0xfd
-                // CPI #$BYTE
-                |_state, _op| {
-                    let val = _state.byte1();
-                    _state.cmp(val);
-                    1
-                }, // 0xfe
-                // RST 7
-                Self::rst, // 0xff
-                ],
+                |_, _| 0,               // 0x8
+                Self::dad,              // 0x9
+                Self::ldax,             // 0xa
+                Self::dcx,              // 0xb
+                Self::inr,              // 0xc
+                Self::dcr,              // 0xd
+                Self::mvi,              // 0xe
+                Self::assignment_extra, // 0xf
+            ],
+            branching: [
+                Self::ret_instr, // 0x0
+                Self::pop_instr, // 0x1
+                Self::jmp_instr, // 0x2
+                |state, op| {
+                    match (op >> 4) & 3 {
+                        0 => state.jmp_instr(op),
+                        1 => {
+                            state.io.write(state.byte1(), state.a);
+                            1
+                        }
+                        2 => {
+                            let val = state.pop();
+                            state.push(state.hl() as u16);
+                            state.h = (val >> 8) as u8;
+                            state.l = val as u8;
+                            0
+                        },
+                        3 => {state.int_enable = false; 0},
+                        _ => unreachable!(),
+                    }
+                }, // 0x3
+                Self::call_instr, // 0x4
+                Self::push_instr, // 0x5
+                Self::immediate,  // 0x6
+                Self::rst,        // 0x7
+                Self::ret_instr,  // 0x8
+                |state, op| {
+                    match (op >> 4) & 3 {
+                        0 => state.ret_instr(op),
+                        1 => 0,
+                        2 => {state.pc = (usize::from(state.h) << 8) | usize::from(state.l); 0},
+                        3 => {state.sp = state.hl(); 0},
+                        _ => unreachable!(),
+                    }
+                }, // 0x9
+                Self::jmp_instr,  // 0xa
+                |state, op| {
+                    match (op >> 4) & 3 {
+                        0 => 0,
+                        1 => {state.a = state.io.read(state.byte1()); 1},
+                        2 => {
+                            std::mem::swap(&mut state.d, &mut state.h);
+                            std::mem::swap(&mut state.e, &mut state.l);
+                            0
+                        }
+                        3 => {state.int_enable = true; 0},
+                        _ => unreachable!(),
+                    }
+                },         // 0xb
+                Self::call_instr, // 0xc
+                Self::call_instr, // 0xd
+                Self::immediate,  // 0xe
+                Self::rst,        // 0xf
+            ],
+            instr_compact: [
+                Self::assignment, // 0x00..0x08
+                Self::assignment, // 0x08..0x10
+                Self::assignment, // 0x10..0x18
+                Self::assignment, // 0x18..0x20
+                Self::assignment, // 0x20..0x28
+                Self::assignment, // 0x28..0x30
+                Self::assignment, // 0x30..0x38
+                Self::assignment, // 0x38..0x40
+                Self::mov,        // 0x40..0x48
+                Self::mov,        // 0x48..0x50
+                Self::mov,        // 0x50..0x58
+                Self::mov,        // 0x58..0x60
+                Self::mov,        // 0x60..0x68
+                Self::mov,        // 0x68..0x70
+                Self::mov,        // 0x70..0x78
+                Self::mov,        // 0x78..0x80
+                Self::add_instr,  // 0x80..0x88
+                Self::adc_instr,  // 0x88..0x90
+                Self::sub_instr,  // 0x90..0x98
+                Self::sbb_instr,  // 0x98..0xa0
+                Self::and_instr,  // 0xa0..0xa8
+                Self::xor_instr,  // 0xa8..0xb0
+                Self::or_instr,   // 0xb0..0xb8
+                Self::cmp_instr,  // 0xb8..0xc0
+                Self::branch,     // 0xc0..0xc8
+                Self::branch,     // 0xc8..0xd0
+                Self::branch,     // 0xd0..0xd8
+                Self::branch,     // 0xd8..0xe0
+                Self::branch,     // 0xe0..0xe8
+                Self::branch,     // 0xe8..0xf0
+                Self::branch,     // 0xf0..0xf8
+                Self::branch,     // 0xf8..0x100
+            ],
         }
     }
 
@@ -667,13 +258,13 @@ impl<T: InOutHandler> State8080<T> {
         if op & 1 == 1 {
             return true;
         }
-        let mut neg = op & (1 << 3) == 0;
+        let neg = op & (1 << 3) == 0;
         let res = match (op >> 4) & 0b11 {
             0 => self.fl.z,
             1 => self.fl.cy,
             2 => self.fl.p,
             3 => self.fl.s,
-            _ => panic!("Invalid flag number"),
+            _ => unreachable!(),
         };
         if neg {
             !res
@@ -697,7 +288,7 @@ impl<T: InOutHandler> State8080<T> {
                 self.l = low
             }
             3 => self.sp = usize::from(high) << 8 | usize::from(low),
-            _ => panic!("Invalid long register"),
+            _ => unreachable!(),
         }
     }
 
@@ -730,17 +321,17 @@ impl<T: InOutHandler> State8080<T> {
         (usize::from(self.h) << 8) | usize::from(self.l)
     }
 
-    fn at_bc(&self) -> u8 {
+    pub fn at_bc(&self) -> u8 {
         let addr = self.bc();
         self.memory[addr]
     }
 
-    fn at_de(&self) -> u8 {
+    pub fn at_de(&self) -> u8 {
         let addr = self.de();
         self.memory[addr]
     }
 
-    fn at_hl(&self) -> u8 {
+    pub fn at_hl(&self) -> u8 {
         let addr = self.hl();
         self.memory[addr]
     }
@@ -774,12 +365,6 @@ impl<T: InOutHandler> State8080<T> {
 
     fn add(&mut self, val: u8) {
         let ans = u16::from(self.a) + u16::from(val);
-        self.set_flags(ans);
-        self.a = ans as u8;
-    }
-
-    fn add_op(&mut self, src: u8) {
-        let ans = u16::from(self.get_register(src)) + u16::from(self.a);
         self.set_flags(ans);
         self.a = ans as u8;
     }
@@ -850,15 +435,6 @@ impl<T: InOutHandler> State8080<T> {
         self.pc = usize::from(addr);
     }
 
-    fn call_if(&mut self, cond: bool) {
-        if cond {
-            let addr = self.word();
-            self.call(addr);
-        } else {
-            self.pc += 2;
-        }
-    }
-
     fn call_instr(&mut self, op: u8) -> usize {
         if self.get_flag(op) {
             self.call(self.word());
@@ -890,15 +466,37 @@ impl<T: InOutHandler> State8080<T> {
     }
 
     fn ldax(&mut self, op: u8) -> usize {
-        let addr = self.get_long(op);
-        self.a = self.memory[addr];
-        0
+        if op == 0x2A {
+            let addr = self.word() as usize;
+            self.l = self.memory[addr];
+            self.h = self.memory[addr + 1];
+            2
+        } else if op == 0x3A {
+            let addr = self.word() as usize;
+            self.a = self.memory[addr];
+            2
+        } else {
+            let addr = self.get_long(op);
+            self.a = self.memory[addr];
+            0
+        }
     }
 
     fn stax(&mut self, op: u8) -> usize {
-        let addr = self.get_long(op);
-        self.memory[addr] = self.a;
-        0
+        if op == 0x22 { // SHLD
+            let addr = self.word();
+            self.memory[usize::from(addr)] = self.l;
+            self.memory[usize::from(addr + 1)] = self.h;
+            2
+        } else if op == 0x32 {
+            let addr = self.word() as usize;
+            self.memory[addr] = self.a;
+            2
+        } else {
+            let addr = self.get_long(op);
+            self.memory[addr] = self.a;
+            0
+        }
     }
 
     fn inx(&mut self, op: u8) -> usize {
@@ -1021,6 +619,78 @@ impl<T: InOutHandler> State8080<T> {
         let num = (op >> 3) & 0b111;
         self.generate_interrupt(num);
         0
+    }
+
+    fn assignment(&mut self, op: u8) -> usize {
+        let func = self.assignments[(op & 0xf) as usize];
+        func(self, op)
+    }
+
+    fn assignment_extra(&mut self, op: u8) -> usize {
+        if op & (1 << 5) != 0 {
+            self.flagop(op)
+        } else {
+            self.rot(op)
+        }
+    }
+
+    fn branch(&mut self, op: u8) -> usize {
+        let func = self.branching[(op & 0xf) as usize];
+        func(self, op)
+    }
+
+    fn rot(&mut self, op: u8) -> usize {
+        match op >> 3 {
+            0 => { // RLC
+                let bit = self.a >> 7;
+                self.a = (self.a << 1) | bit;
+                self.fl.cy = bit == 1;
+            }
+            1 => { // RRC
+                let bit = self.a << 7;
+                self.a = (self.a >> 1) | bit;
+                self.fl.cy = bit > 0;
+            }
+            2 => { // RAL
+                let prev_carry = if self.fl.cy { 1 } else { 0 };
+                self.fl.cy = (self.a >> 7) == 1;
+                self.a = (self.a << 1) | prev_carry;
+            }
+            3 => { // RAR
+                let prev_carry = if self.fl.cy { 1 } else { 0 };
+                self.fl.cy = (self.a & 1) == 1;
+                self.a = (self.a >> 1) | prev_carry;
+            }
+            _ => panic!("Invalid rotation operation"),
+        };
+        0
+    }
+
+    fn flagop(&mut self, op: u8) -> usize {
+        match (op >> 3) & 3 {
+            0 => {}, // DAA
+            1 => self.a = !self.a, // CMA
+            2 => self.fl.cy = true, // STC
+            3 => self.fl.cy = !self.fl.cy, // CMC
+            _ => unreachable!(),
+        };
+        0
+    }
+
+    fn immediate(&mut self, op: u8) -> usize {
+        let val = self.byte1();
+        match (op >> 3) & 7 {
+            0 => self.add(val),
+            1 => self.adc(val),
+            2 => self.sub(val),
+            3 => self.sbb(val),
+            4 => self.and(val),
+            5 => self.xor(val),
+            6 => self.or(val),
+            7 => self.cmp(val),
+            _ => unreachable!(),
+        };
+        1
     }
 }
 
@@ -1457,16 +1127,13 @@ fn disassemble8080_op(codebuffer: &[u8], pc: usize) -> usize {
 pub fn emulate8080<T: InOutHandler>(state: &mut State8080<T>, dis: bool) -> i32 {
     assert!(state.pc < state.memory.len());
     let opcode = state.memory[state.pc];
-    let mut ans: u16;
-    let ans8: u8;
-    let ans32: u32;
-    let addr: usize;
     if dis {
         disassemble8080_op(&state.memory, state.pc);
     }
 
     state.pc += 1;
-    let func = state.instructions[opcode as usize];
+    // let func = state.instructions[opcode as usize];
+    let func = state.instr_compact[(opcode >> 3) as usize];
     state.pc += func(state, opcode);
 
     if dis {

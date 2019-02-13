@@ -2,7 +2,7 @@ use emulator::*;
 use sdl2::{
     event::Event, keyboard::Keycode, pixels::Color, rect::Point, render::Canvas, video::Window,
 };
-use std::{env::args, thread, time};
+use std::{env::args, time};
 
 struct SpaceInvadersInOut {
     offset: u8,
