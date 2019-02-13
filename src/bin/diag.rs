@@ -12,10 +12,24 @@ pub fn run_diag() {
     state.memory[0x59e] = 0x05;
 
     state.pc = 0x100;
-    while emulate8080(&mut state, false) == 0 {
+    while emulate8080(&mut state, true) == 0 {
         if state.pc == 0x0689 { // Error procedure
             eprintln!("\x1b[1;31mDiagnostic failed\x1b[0m");
             return;
+
+        } else if state.pc == 0x069B { // Success procedure
+            eprintln!("\x1b[1;32mDiagnostic successful\x1b[0m");
+            return;
+        } else if state.pc == 5 { // Print routine
+            if state.c == 9 {
+                let mut s = state.de();
+                while state.memory[s] != b'$' {
+                    print!("{}", state.memory[s] as char);
+                    s += 1;
+                }
+                println!();
+            }
+            state.ret();
         } else if state.pc == 0 { // End of program
             return;
         }
