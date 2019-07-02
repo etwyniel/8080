@@ -56,12 +56,12 @@ fn display_window(display_buffer: &[u8], canvas: &mut Canvas<Window>) {
 }
 
 fn main() {
-    let mut state = State8080::new(SpaceInvadersInOut {
+    let mut emu = Emu8080::new(SpaceInvadersInOut {
         offset: 0,
         xy: 0x0000,
     });
     if let Some(filename) = args().nth(1) {
-        state.read_file_in_memory_at(&filename, 0).unwrap();
+        emu.read_file_in_memory_at(&filename, 0).unwrap();
     } else {
         eprintln!("Usage: {} rom", args().next().unwrap());
         std::process::exit(1);
@@ -96,8 +96,8 @@ fn main() {
                 _ => {}
             }
         }
-        if state.pc > 0x1FFF {
-            panic!("Program counter out of game rom: {:04X}", state.pc);
+        if emu.state.pc > 0x1FFF {
+            panic!("Program counter out of game rom: {:04X}", emu.state.pc);
         }
         if last_interrupt
             .elapsed()
@@ -105,14 +105,14 @@ fn main() {
             > interrupt_delay
         {
             let display_buffer =
-                &state.memory[0x2400..(0x2400 + (WINDOW_WIDTH * WINDOW_HEIGHT) / 8)];
+                &emu.state.memory[0x2400..(0x2400 + (WINDOW_WIDTH * WINDOW_HEIGHT) / 8)];
             display_window(display_buffer, &mut canvas);
             canvas.present();
-            state.generate_interrupt(2);
+            emu.generate_interrupt(2);
             last_interrupt = time::SystemTime::now();
         }
         print!("#{} ", n);
         n += 1;
-        done = emulate8080(&mut state, true);
+        done = emulate8080(&mut emu, true);
     }
 }

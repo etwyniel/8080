@@ -58,9 +58,7 @@ fn parity_test() {
     assert!(!parity(0x99, true));
 }
 
-type Instruction<T> = fn(&mut State8080<T>, u8) -> usize;
-
-pub struct State8080<T: InOutHandler> {
+pub struct State8080 {
     pub a: u8,
     pub b: u8,
     pub c: u8,
@@ -73,146 +71,9 @@ pub struct State8080<T: InOutHandler> {
     pub memory: Vec<u8>,
     pub fl: Flags,
     pub int_enable: bool,
-    pub io: T,
-    pub assignments: [Instruction<T>; 16],
-    pub branching: [Instruction<T>; 16],
-    pub instr_compact: [Instruction<T>; 32],
 }
 
-impl<T: InOutHandler> State8080<T> {
-    pub fn new(io_handler: T) -> State8080<T> {
-        State8080 {
-            a: 0,
-            b: 0,
-            c: 0,
-            d: 0,
-            e: 0,
-            h: 0,
-            l: 0,
-            sp: 0,
-            pc: 0,
-            memory: vec![0xFF; 0x10000],
-            fl: Flags {
-                z: false,
-                s: false,
-                p: false,
-                cy: false,
-                ac: false,
-            },
-            int_enable: false,
-            io: io_handler,
-            assignments: [
-                // NOP
-                |_, _| 0,               // 0x0
-                Self::lxi,              // 0x1
-                Self::stax,             // 0x2
-                Self::inx,              // 0x3
-                Self::inr,              // 0x4
-                Self::dcr,              // 0x5
-                Self::mvi,              // 0x6
-                Self::assignment_extra, // 0x7
-                // NOP
-                |_, _| 0,               // 0x8
-                Self::dad,              // 0x9
-                Self::ldax,             // 0xa
-                Self::dcx,              // 0xb
-                Self::inr,              // 0xc
-                Self::dcr,              // 0xd
-                Self::mvi,              // 0xe
-                Self::assignment_extra, // 0xf
-            ],
-            branching: [
-                Self::ret_instr, // 0x0
-                Self::pop_instr, // 0x1
-                Self::jmp_instr, // 0x2
-                |state, op| {
-                    match (op >> 4) & 3 {
-                        0 => state.jmp_instr(op),
-                        1 => {
-                            state.io.write(state.byte1(), state.a);
-                            1
-                        }
-                        2 => {
-                            let val = state.pop();
-                            state.push(state.hl() as u16);
-                            state.h = (val >> 8) as u8;
-                            state.l = val as u8;
-                            0
-                        },
-                        3 => {state.int_enable = false; 0},
-                        _ => unreachable!(),
-                    }
-                }, // 0x3
-                Self::call_instr, // 0x4
-                Self::push_instr, // 0x5
-                Self::immediate,  // 0x6
-                Self::rst,        // 0x7
-                Self::ret_instr,  // 0x8
-                |state, op| {
-                    match (op >> 4) & 3 {
-                        0 => state.ret_instr(op),
-                        1 => 0,
-                        2 => {state.pc = (usize::from(state.h) << 8) | usize::from(state.l); 0},
-                        3 => {state.sp = state.hl(); 0},
-                        _ => unreachable!(),
-                    }
-                }, // 0x9
-                Self::jmp_instr,  // 0xa
-                |state, op| {
-                    match (op >> 4) & 3 {
-                        0 => 0,
-                        1 => {state.a = state.io.read(state.byte1()); 1},
-                        2 => {
-                            std::mem::swap(&mut state.d, &mut state.h);
-                            std::mem::swap(&mut state.e, &mut state.l);
-                            0
-                        }
-                        3 => {state.int_enable = true; 0},
-                        _ => unreachable!(),
-                    }
-                },         // 0xb
-                Self::call_instr, // 0xc
-                Self::call_instr, // 0xd
-                Self::immediate,  // 0xe
-                Self::rst,        // 0xf
-            ],
-            instr_compact: [
-                Self::assignment, // 0x00..0x08
-                Self::assignment, // 0x08..0x10
-                Self::assignment, // 0x10..0x18
-                Self::assignment, // 0x18..0x20
-                Self::assignment, // 0x20..0x28
-                Self::assignment, // 0x28..0x30
-                Self::assignment, // 0x30..0x38
-                Self::assignment, // 0x38..0x40
-                Self::mov,        // 0x40..0x48
-                Self::mov,        // 0x48..0x50
-                Self::mov,        // 0x50..0x58
-                Self::mov,        // 0x58..0x60
-                Self::mov,        // 0x60..0x68
-                Self::mov,        // 0x68..0x70
-                Self::mov,        // 0x70..0x78
-                Self::mov,        // 0x78..0x80
-                Self::add_instr,  // 0x80..0x88
-                Self::adc_instr,  // 0x88..0x90
-                Self::sub_instr,  // 0x90..0x98
-                Self::sbb_instr,  // 0x98..0xa0
-                Self::and_instr,  // 0xa0..0xa8
-                Self::xor_instr,  // 0xa8..0xb0
-                Self::or_instr,   // 0xb0..0xb8
-                Self::cmp_instr,  // 0xb8..0xc0
-                Self::branch,     // 0xc0..0xc8
-                Self::branch,     // 0xc8..0xd0
-                Self::branch,     // 0xd0..0xd8
-                Self::branch,     // 0xd8..0xe0
-                Self::branch,     // 0xe0..0xe8
-                Self::branch,     // 0xe8..0xf0
-                Self::branch,     // 0xf0..0xf8
-                Self::branch,     // 0xf8..0x100
-            ],
-        }
-    }
-
+impl State8080 {
     pub fn set_register(&mut self, reg: u8, val: u8) {
         match reg {
             0 => self.b = val,
@@ -292,23 +153,6 @@ impl<T: InOutHandler> State8080<T> {
         }
     }
 
-    pub fn read_file_in_memory_at(
-        &mut self,
-        filename: &str,
-        offset: usize,
-    ) -> std::io::Result<usize> {
-        File::open(filename)?.read(&mut self.memory[offset..])
-    }
-
-    pub fn generate_interrupt(&mut self, interrupt_num: u8) {
-        if self.int_enable {
-            // println!("* Generating interrupt {}", interrupt_num);
-            self.int_enable = false;
-            self.push(self.pc as u16);
-            self.pc = usize::from(interrupt_num << 3);
-        }
-    }
-
     pub fn bc(&self) -> usize {
         (usize::from(self.b) << 8) | usize::from(self.c)
     }
@@ -362,77 +206,198 @@ impl<T: InOutHandler> State8080<T> {
         self.set_r(res as u8);
         self.fl.cy = res > 0xff;
     }
+}
+
+pub struct Emu8080<T: InOutHandler> {
+    pub state: State8080,
+    io: T,
+}
+
+type Instruction<T> = fn(&mut Emu8080<T>, u8) -> usize;
+
+impl<T: InOutHandler> Emu8080<T> {
+
+    pub fn new(io_handler: T) -> Self {
+        Emu8080 {
+            state: State8080 {
+                a: 0,
+                b: 0,
+                c: 0,
+                d: 0,
+                e: 0,
+                h: 0,
+                l: 0,
+                sp: 0,
+                pc: 0,
+                memory: vec![0xFF; 0x10000],
+                fl: Flags {
+                    z: false,
+                    s: false,
+                    p: false,
+                    cy: false,
+                    ac: false,
+                },
+                int_enable: false,
+            },
+            io: io_handler,
+        }
+    }
+
+    pub fn set_register(&mut self, reg: u8, val: u8) {
+        self.state.set_register(reg, val)
+    }
+
+    pub fn get_register(&mut self, reg: u8) -> u8 {
+        self.state.get_register(reg)
+    }
+
+    pub fn get_long(&self, op: u8) -> usize {
+        self.state.get_long(op)
+    }
+
+    pub fn get_flag(&self, op: u8) -> bool {
+        self.state.get_flag(op)
+    }
+
+    pub fn set_long(&mut self, op: u8, val: (u8, u8)) {
+        self.state.set_long(op, val)
+    }
+
+    pub fn read_file_in_memory_at(
+        &mut self,
+        filename: &str,
+        offset: usize,
+    ) -> std::io::Result<usize> {
+        File::open(filename)?.read(&mut self.state.memory[offset..])
+    }
+
+    pub fn generate_interrupt(&mut self, interrupt_num: u8) {
+        if self.state.int_enable {
+            // println!("* Generating interrupt {}", interrupt_num);
+            self.state.int_enable = false;
+            self.push(self.state.pc as u16);
+            self.state.pc = usize::from(interrupt_num << 3);
+        }
+    }
+
+    pub fn bc(&self) -> usize {
+        self.state.bc()
+    }
+
+    pub fn de(&self) -> usize {
+        self.state.de()
+    }
+
+    pub fn hl(&self) -> usize {
+        self.state.hl()
+    }
+
+    pub fn at_bc(&self) -> u8 {
+        self.state.at_bc()
+    }
+
+    pub fn at_de(&self) -> u8 {
+        self.state.at_de()
+    }
+
+    pub fn at_hl(&self) -> u8 {
+        self.state.at_hl()
+    }
+
+    fn byte1(&self) -> u8 {
+        self.state.byte1()
+    }
+
+    fn byte2(&self) -> u8 {
+        self.state.byte2()
+    }
+
+    fn word(&self) -> u16 {
+        self.state.word()
+    }
+
+    fn word_at(&self, addr: usize) -> u16 {
+        self.state.word_at(addr)
+    }
+
+    fn set_r(&mut self, res: u8) {
+        self.state.set_r(res)
+    }
+
+    fn set_flags(&mut self, res: u16) {
+        self.state.set_flags(res)
+    }
 
     fn add(&mut self, val: u8) {
-        let ans = u16::from(self.a) + u16::from(val);
+        let ans = u16::from(self.state.a) + u16::from(val);
         self.set_flags(ans);
-        self.a = ans as u8;
+        self.state.a = ans as u8;
     }
 
     fn adc(&mut self, val: u8) {
-        let mut cy = if self.fl.cy { 1u8 } else { 0u8 };
+        let mut cy = if self.state.fl.cy { 1u8 } else { 0u8 };
         self.add(val);
-        if self.fl.cy {
+        if self.state.fl.cy {
             cy += 1
         };
         self.add(cy);
     }
 
     fn sub(&mut self, val: u8) {
-        let Wrapping(ans) = Wrapping(u16::from(self.a)) - Wrapping(u16::from(val));
+        let Wrapping(ans) = Wrapping(u16::from(self.state.a)) - Wrapping(u16::from(val));
         self.set_flags(ans);
-        self.a = ans as u8;
+        self.state.a = ans as u8;
     }
 
     fn sbb(&mut self, val: u8) {
-        let carry = Wrapping(if self.fl.cy { 1u8 } else { 0u8 });
+        let carry = Wrapping(if self.state.fl.cy { 1u8 } else { 0u8 });
         let Wrapping(rhs) = Wrapping(val) + carry;
         self.sub(rhs);
     }
 
     fn and(&mut self, val: u8) {
-        self.a &= val;
-        let temp = self.a;
+        self.state.a &= val;
+        let temp = self.state.a;
         self.set_r(temp);
     }
 
     fn xor(&mut self, val: u8) {
-        self.a ^= val;
-        let temp = self.a;
+        self.state.a ^= val;
+        let temp = self.state.a;
         self.set_r(temp);
     }
 
     fn or(&mut self, val: u8) {
-        self.a |= val;
-        let temp = self.a;
+        self.state.a |= val;
+        let temp = self.state.a;
         self.set_r(temp);
     }
 
     fn cmp(&mut self, val: u8) {
-        let ans = Wrapping(u16::from(self.a)) - Wrapping(u16::from(val));
+        let ans = Wrapping(u16::from(self.state.a)) - Wrapping(u16::from(val));
         self.set_flags(ans.0);
     }
 
     fn pop(&mut self) -> u16 {
-        let r = (u16::from(self.memory[self.sp + 1]) << 8) | u16::from(self.memory[self.sp]);
-        self.sp += 2;
+        let r = (u16::from(self.state.memory[self.state.sp + 1]) << 8) | u16::from(self.state.memory[self.state.sp]);
+        self.state.sp += 2;
         r
     }
 
     fn push(&mut self, val: u16) {
-        self.sp -= 2;
-        self.memory[self.sp] = (val & 0xff) as u8;
-        self.memory[self.sp + 1] = (val >> 8) as u8;
+        self.state.sp -= 2;
+        self.state.memory[self.state.sp] = (val & 0xff) as u8;
+        self.state.memory[self.state.sp + 1] = (val >> 8) as u8;
     }
 
     pub fn ret(&mut self) {
-        self.pc = usize::from(self.pop());
+        self.state.pc = usize::from(self.pop());
     }
 
     pub fn call(&mut self, addr: u16) {
-        let pc = self.pc as u16;
+        let pc = self.state.pc as u16;
         self.push(pc + 2);
-        self.pc = usize::from(addr);
+        self.state.pc = usize::from(addr);
     }
 
     fn call_instr(&mut self, op: u8) -> usize {
@@ -453,7 +418,7 @@ impl<T: InOutHandler> State8080<T> {
 
     fn jmp_instr(&mut self, op: u8) -> usize {
         if self.get_flag(op) {
-            self.pc = self.word() as usize;
+            self.state.pc = self.word() as usize;
             0
         } else {
             2
@@ -468,33 +433,34 @@ impl<T: InOutHandler> State8080<T> {
     fn ldax(&mut self, op: u8) -> usize {
         if op == 0x2A {
             let addr = self.word() as usize;
-            self.l = self.memory[addr];
-            self.h = self.memory[addr + 1];
+            self.state.l = self.state.memory[addr];
+            self.state.h = self.state.memory[addr + 1];
             2
         } else if op == 0x3A {
             let addr = self.word() as usize;
-            self.a = self.memory[addr];
+            self.state.a = self.state.memory[addr];
             2
         } else {
             let addr = self.get_long(op);
-            self.a = self.memory[addr];
+            self.state.a = self.state.memory[addr];
             0
         }
     }
 
     fn stax(&mut self, op: u8) -> usize {
-        if op == 0x22 { // SHLD
+        if op == 0x22 {
+            // SHLD
             let addr = self.word();
-            self.memory[usize::from(addr)] = self.l;
-            self.memory[usize::from(addr + 1)] = self.h;
+            self.state.memory[usize::from(addr)] = self.state.l;
+            self.state.memory[usize::from(addr + 1)] = self.state.h;
             2
         } else if op == 0x32 {
             let addr = self.word() as usize;
-            self.memory[addr] = self.a;
+            self.state.memory[addr] = self.state.a;
             2
         } else {
             let addr = self.get_long(op);
-            self.memory[addr] = self.a;
+            self.state.memory[addr] = self.state.a;
             0
         }
     }
@@ -526,9 +492,9 @@ impl<T: InOutHandler> State8080<T> {
     }
 
     fn dad(&mut self, op: u8) -> usize {
-        let Wrapping(val) = Wrapping(self.hl()) + Wrapping(self.get_long(op));
+        let Wrapping(val) = Wrapping(self.state.hl()) + Wrapping(self.get_long(op));
         self.set_long(0x20, (val as u8, (val >> 8) as u8));
-        self.fl.cy = val > 0xFFFF;
+        self.state.fl.cy = val > 0xFFFF;
         0
     }
 
@@ -548,17 +514,17 @@ impl<T: InOutHandler> State8080<T> {
 
     fn add_instr(&mut self, op: u8) -> usize {
         let src = op & 0b111;
-        let val = u16::from(self.get_register(src)) + u16::from(self.a);
+        let val = u16::from(self.get_register(src)) + u16::from(self.state.a);
         self.set_flags(val);
-        self.a = val as u8;
+        self.state.a = val as u8;
         0
     }
 
     fn adc_instr(&mut self, op: u8) -> usize {
         let val = self.get_register(op & 0b111);
-        let mut cy = if self.fl.cy { 1u8 } else { 0u8 };
+        let mut cy = if self.state.fl.cy { 1u8 } else { 0u8 };
         self.add(val);
-        if self.fl.cy {
+        if self.state.fl.cy {
             cy += 1
         };
         self.add(cy);
@@ -573,7 +539,7 @@ impl<T: InOutHandler> State8080<T> {
 
     fn sbb_instr(&mut self, op: u8) -> usize {
         let val = self.get_register(op & 0b111);
-        let carry = Wrapping(if self.fl.cy { 1u8 } else { 0u8 });
+        let carry = Wrapping(if self.state.fl.cy { 1u8 } else { 0u8 });
         let Wrapping(rhs) = Wrapping(val) + carry;
         self.sub(rhs);
         0
@@ -605,13 +571,14 @@ impl<T: InOutHandler> State8080<T> {
 
     fn pop_instr(&mut self, op: u8) -> usize {
         let val = self.pop();
-        if op ==  0xf1 { // POP PSW
-            self.a = (val >> 8) as u8;
-            self.fl.s = val & 0x80 > 0;
-            self.fl.z = val & 0x40 > 0;
-            self.fl.ac = val & 0x10 > 0;
-            self.fl.p = val & 0x04 > 0;
-            self.fl.cy = val & 0x01 > 0;
+        if op == 0xf1 {
+            // POP PSW
+            self.state.a = (val >> 8) as u8;
+            self.state.fl.s = val & 0x80 > 0;
+            self.state.fl.z = val & 0x40 > 0;
+            self.state.fl.ac = val & 0x10 > 0;
+            self.state.fl.p = val & 0x04 > 0;
+            self.state.fl.cy = val & 0x01 > 0;
         } else {
             self.set_long(op, (val as u8, (val >> 8) as u8));
         }
@@ -619,14 +586,25 @@ impl<T: InOutHandler> State8080<T> {
     }
 
     fn push_instr(&mut self, op: u8) -> usize {
-        let mut val = 0;
-        if op == 0xf5 { // PUSH PSW
-            val = u16::from(self.a) << 8;
-            if self.fl.s {val |= 0x80};
-            if self.fl.z {val |= 0x40};
-            if self.fl.ac {val |= 0x10};
-            if self.fl.p {val |= 0x04};
-            if self.fl.cy {val |= 0x01};
+        let mut val;
+        if op == 0xf5 {
+            // PUSH PSW
+            val = u16::from(self.state.a) << 8;
+            if self.state.fl.s {
+                val |= 0x80
+            };
+            if self.state.fl.z {
+                val |= 0x40
+            };
+            if self.state.fl.ac {
+                val |= 0x10
+            };
+            if self.state.fl.p {
+                val |= 0x04
+            };
+            if self.state.fl.cy {
+                val |= 0x01
+            };
         } else {
             val = self.get_long(op) as u16;
         }
@@ -641,8 +619,7 @@ impl<T: InOutHandler> State8080<T> {
     }
 
     fn assignment(&mut self, op: u8) -> usize {
-        let func = self.assignments[(op & 0xf) as usize];
-        func(self, op)
+        Self::ASSIGNMENTS[(op & 0xf) as usize](self, op)
     }
 
     fn assignment_extra(&mut self, op: u8) -> usize {
@@ -654,31 +631,34 @@ impl<T: InOutHandler> State8080<T> {
     }
 
     fn branch(&mut self, op: u8) -> usize {
-        let func = self.branching[(op & 0xf) as usize];
-        func(self, op)
+        Self::BRANCHING[(op & 0xf) as usize](self, op)
     }
 
     fn rot(&mut self, op: u8) -> usize {
         match op >> 3 {
-            0 => { // RLC
-                let bit = self.a >> 7;
-                self.a = (self.a << 1) | bit;
-                self.fl.cy = bit == 1;
+            0 => {
+                // RLC
+                let bit = self.state.a >> 7;
+                self.state.a = (self.state.a << 1) | bit;
+                self.state.fl.cy = bit == 1;
             }
-            1 => { // RRC
-                let bit = self.a << 7;
-                self.a = (self.a >> 1) | bit;
-                self.fl.cy = bit > 0;
+            1 => {
+                // RRC
+                let bit = self.state.a << 7;
+                self.state.a = (self.state.a >> 1) | bit;
+                self.state.fl.cy = bit > 0;
             }
-            2 => { // RAL
-                let prev_carry = if self.fl.cy { 1 } else { 0 };
-                self.fl.cy = (self.a >> 7) == 1;
-                self.a = (self.a << 1) | prev_carry;
+            2 => {
+                // RAL
+                let prev_carry = if self.state.fl.cy { 1 } else { 0 };
+                self.state.fl.cy = (self.state.a >> 7) == 1;
+                self.state.a = (self.state.a << 1) | prev_carry;
             }
-            3 => { // RAR
-                let prev_carry = if self.fl.cy { 1 } else { 0 };
-                self.fl.cy = (self.a & 1) == 1;
-                self.a = (self.a >> 1) | prev_carry;
+            3 => {
+                // RAR
+                let prev_carry = if self.state.fl.cy { 1 } else { 0 };
+                self.state.fl.cy = (self.state.a & 1) == 1;
+                self.state.a = (self.state.a >> 1) | prev_carry;
             }
             _ => panic!("Invalid rotation operation"),
         };
@@ -687,10 +667,10 @@ impl<T: InOutHandler> State8080<T> {
 
     fn flagop(&mut self, op: u8) -> usize {
         match (op >> 3) & 3 {
-            0 => {}, // DAA
-            1 => self.a = !self.a, // CMA
-            2 => self.fl.cy = true, // STC
-            3 => self.fl.cy = !self.fl.cy, // CMC
+            0 => {}                        // DAA
+            1 => self.state.a = !self.state.a,         // CMA
+            2 => self.state.fl.cy = true,        // STC
+            3 => self.state.fl.cy = !self.state.fl.cy, // CMC
             _ => unreachable!(),
         };
         0
@@ -711,6 +691,124 @@ impl<T: InOutHandler> State8080<T> {
         };
         1
     }
+    const ASSIGNMENTS: [Instruction<T>; 16] = [
+        // NOP
+        |_, _| 0,               // 0x0
+        Self::lxi,              // 0x1
+        Self::stax,             // 0x2
+        Self::inx,              // 0x3
+        Self::inr,              // 0x4
+        Self::dcr,              // 0x5
+        Self::mvi,              // 0x6
+        Self::assignment_extra, // 0x7
+        // NOP
+        |_, _| 0,               // 0x8
+        Self::dad,              // 0x9
+        Self::ldax,             // 0xa
+        Self::dcx,              // 0xb
+        Self::inr,              // 0xc
+        Self::dcr,              // 0xd
+        Self::mvi,              // 0xe
+        Self::assignment_extra, // 0xf
+    ];
+    const BRANCHING: [Instruction<T>; 16] = [
+        Self::ret_instr, // 0x0
+        Self::pop_instr, // 0x1
+        Self::jmp_instr, // 0x2
+        |emu, op| match (op >> 4) & 3 {
+            0 => emu.jmp_instr(op),
+            1 => {
+                emu.io.write(emu.byte1(), emu.state.a);
+                1
+            }
+            2 => {
+                let val = emu.pop();
+                emu.push(emu.hl() as u16);
+                emu.state.h = (val >> 8) as u8;
+                emu.state.l = val as u8;
+                0
+            }
+            3 => {
+                emu.state.int_enable = false;
+                0
+            }
+            _ => unreachable!(),
+        }, // 0x3
+        Self::call_instr, // 0x4
+        Self::push_instr, // 0x5
+        Self::immediate, // 0x6
+        Self::rst,       // 0x7
+        Self::ret_instr, // 0x8
+        |emu, op| match (op >> 4) & 3 {
+            0 => emu.ret_instr(op),
+            1 => 0,
+            2 => {
+                emu.state.pc = (usize::from(emu.state.h) << 8) | usize::from(emu.state.l);
+                0
+            }
+            3 => {
+                emu.state.sp = emu.hl();
+                0
+            }
+            _ => unreachable!(),
+        }, // 0x9
+        Self::jmp_instr, // 0xa
+        |emu, op| match (op >> 4) & 3 {
+            0 => 0,
+            1 => {
+                emu.state.a = emu.io.read(emu.byte1());
+                1
+            }
+            2 => {
+                std::mem::swap(&mut emu.state.d, &mut emu.state.h);
+                std::mem::swap(&mut emu.state.e, &mut emu.state.l);
+                0
+            }
+            3 => {
+                emu.state.int_enable = true;
+                0
+            }
+            _ => unreachable!(),
+        }, // 0xb
+        Self::call_instr, // 0xc
+        Self::call_instr, // 0xd
+        Self::immediate, // 0xe
+        Self::rst,       // 0xf
+    ];
+    const INSTR_COMPACT: [Instruction<T>; 32] = [
+        Self::assignment, // 0x00..0x08
+        Self::assignment, // 0x08..0x10
+        Self::assignment, // 0x10..0x18
+        Self::assignment, // 0x18..0x20
+        Self::assignment, // 0x20..0x28
+        Self::assignment, // 0x28..0x30
+        Self::assignment, // 0x30..0x38
+        Self::assignment, // 0x38..0x40
+        Self::mov,        // 0x40..0x48
+        Self::mov,        // 0x48..0x50
+        Self::mov,        // 0x50..0x58
+        Self::mov,        // 0x58..0x60
+        Self::mov,        // 0x60..0x68
+        Self::mov,        // 0x68..0x70
+        Self::mov,        // 0x70..0x78
+        Self::mov,        // 0x78..0x80
+        Self::add_instr,  // 0x80..0x88
+        Self::adc_instr,  // 0x88..0x90
+        Self::sub_instr,  // 0x90..0x98
+        Self::sbb_instr,  // 0x98..0xa0
+        Self::and_instr,  // 0xa0..0xa8
+        Self::xor_instr,  // 0xa8..0xb0
+        Self::or_instr,   // 0xb0..0xb8
+        Self::cmp_instr,  // 0xb8..0xc0
+        Self::branch,     // 0xc0..0xc8
+        Self::branch,     // 0xc8..0xd0
+        Self::branch,     // 0xd0..0xd8
+        Self::branch,     // 0xd8..0xe0
+        Self::branch,     // 0xe0..0xe8
+        Self::branch,     // 0xe8..0xf0
+        Self::branch,     // 0xf0..0xf8
+        Self::branch,     // 0xf8..0x100
+    ];
 }
 
 fn disassemble8080_op(codebuffer: &[u8], pc: usize) -> usize {
@@ -1134,8 +1232,6 @@ fn disassemble8080_op(codebuffer: &[u8], pc: usize) -> usize {
             opbytes = 2;
         }
         0xff => print!("RST   7"),
-
-        _ => {}
     }
 
     println!();
@@ -1143,26 +1239,25 @@ fn disassemble8080_op(codebuffer: &[u8], pc: usize) -> usize {
     opbytes
 }
 
-pub fn emulate8080<T: InOutHandler>(state: &mut State8080<T>, dis: bool) -> i32 {
-    assert!(state.pc < state.memory.len());
-    let opcode = state.memory[state.pc];
+pub fn emulate8080<T: InOutHandler>(emu: &mut Emu8080<T>, dis: bool) -> i32 {
+    assert!(emu.state.pc < emu.state.memory.len());
+    let opcode = emu.state.memory[emu.state.pc];
     if dis {
-        disassemble8080_op(&state.memory, state.pc);
+        disassemble8080_op(&emu.state.memory, emu.state.pc);
     }
 
-    state.pc += 1;
-    // let func = state.instructions[opcode as usize];
-    let func = state.instr_compact[(opcode >> 3) as usize];
-    state.pc += func(state, opcode);
+    emu.state.pc += 1;
+    // let func = emu.state.instructions[opcode as usize];
+    emu.state.pc += Emu8080::<T>::INSTR_COMPACT[(opcode >> 3) as usize](emu, opcode);
 
     if dis {
         println!(
             "Registers: A: {:02X} BC: {:02X}{:02X} DE: {:02X}{:02X} HL: {:02X}{:02X}, SP: {:02X}",
-            state.a, state.b, state.c, state.d, state.e, state.h, state.l, state.sp,
+            emu.state.a, emu.state.b, emu.state.c, emu.state.d, emu.state.e, emu.state.h, emu.state.l, emu.state.sp,
         );
         println!(
             "Flags: s: {} z: {} p: {} cy: {}",
-            state.fl.s, state.fl.z, state.fl.p, state.fl.cy
+            emu.state.fl.s, emu.state.fl.z, emu.state.fl.p, emu.state.fl.cy
         );
     }
 
