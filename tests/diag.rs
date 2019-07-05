@@ -2,6 +2,7 @@ use emulator::{DefaultHandler, Emu8080};
 
 pub static DIAG_BYTES: &'static [u8] = include_bytes!("cpudiag.bin");
 
+#[test]
 pub fn run_diag() {
     let mut emu = Emu8080::new(DefaultHandler);
     emu.memory[0x100..(0x100 + DIAG_BYTES.len())].copy_from_slice(DIAG_BYTES);
@@ -37,8 +38,4 @@ pub fn run_diag() {
             return;
         }
     }
-}
-
-fn main() {
-    run_diag();
 }

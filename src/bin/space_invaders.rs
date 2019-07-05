@@ -4,6 +4,7 @@ use sdl2::{
 };
 use std::{env::args, time};
 
+#[derive(Default)]
 struct SpaceInvadersInOut {
     offset: u8,
     xy: u16,
@@ -14,10 +15,8 @@ impl InOutHandler for SpaceInvadersInOut {
         match port {
             0 => 14,
             1 => 9,
-            3 => {
-                ((self.xy >> (8 - self.offset)) & 0xff) as u8
-            }
-            _ => { 0 }
+            3 => ((self.xy >> (8 - self.offset)) & 0xff) as u8,
+            _ => 0,
         }
     }
 
@@ -56,10 +55,7 @@ fn display_window(display_buffer: &[u8], canvas: &mut Canvas<Window>) {
 }
 
 fn main() {
-    let mut emu = Emu8080::new(SpaceInvadersInOut {
-        offset: 0,
-        xy: 0x0000,
-    });
+    let mut emu = Emu8080::<SpaceInvadersInOut>::default();
     if let Some(filename) = args().nth(1) {
         emu.read_file_in_memory_at(&filename, 0).unwrap();
     } else {
@@ -96,16 +92,15 @@ fn main() {
                 _ => {}
             }
         }
-        if emu.state.pc > 0x1FFF {
-            panic!("Program counter out of game rom: {:04X}", emu.state.pc);
+        if emu.pc > 0x1FFF {
+            panic!("Program counter out of game rom: {:04X}", emu.pc);
         }
         if last_interrupt
             .elapsed()
             .unwrap_or_else(|_| time::Duration::new(0, 0))
             > interrupt_delay
         {
-            let display_buffer =
-                &emu.state.memory[0x2400..(0x2400 + (WINDOW_WIDTH * WINDOW_HEIGHT) / 8)];
+            let display_buffer = &emu.memory[0x2400..(0x2400 + (WINDOW_WIDTH * WINDOW_HEIGHT) / 8)];
             display_window(display_buffer, &mut canvas);
             canvas.present();
             emu.generate_interrupt(2);
@@ -113,6 +108,6 @@ fn main() {
         }
         print!("#{} ", n);
         n += 1;
-        done = emulate8080(&mut emu, true);
+        done = emu.step_dis();
     }
 }

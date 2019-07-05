@@ -1,14 +1,13 @@
 use std::fs::File;
 use std::io::prelude::*;
 use std::num::Wrapping;
+use std::ops::{Deref, DerefMut};
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn it_works() {
-        assert_eq!(2 + 2, 4);
-    }
-}
+pub mod dis;
+pub mod state;
+
+use dis::disassemble8080_op;
+use state::*;
 
 pub trait InOutHandler {
     fn read(&mut self, port: u8) -> u8;
@@ -24,199 +23,29 @@ impl InOutHandler for DefaultHandler {
     fn write(&mut self, _port: u8, _val: u8) {}
 }
 
-pub struct Flags {
-    pub z: bool,
-    pub s: bool,
-    pub p: bool,
-    pub cy: bool,
-    pub ac: bool, //pad: i32
-}
-
-impl Flags {
-    pub fn clear(&mut self) {
-        self.z = true;
-        self.s = false;
-        self.p = true;
-        self.cy = false;
-        self.ac = false;
-    }
-}
-
-fn parity(mut x: u8, cy: bool) -> bool {
-    let mut p = if cy { 1 } else { 0 };
-    for _ in 0..8 {
-        if x & 1 != 0 {
-            p += 1
-        };
-        x >>= 1;
-    }
-    p & 1 == 0
-}
-
-#[test]
-fn parity_test() {
-    assert!(!parity(0x99, true));
-}
-
-pub struct State8080 {
-    pub a: u8,
-    pub b: u8,
-    pub c: u8,
-    pub d: u8,
-    pub e: u8,
-    pub h: u8,
-    pub l: u8,
-    pub sp: usize,
-    pub pc: usize,
-    pub memory: Vec<u8>,
-    pub fl: Flags,
-    pub int_enable: bool,
-}
-
-impl State8080 {
-    pub fn set_register(&mut self, reg: u8, val: u8) {
-        match reg {
-            0 => self.b = val,
-            1 => self.c = val,
-            2 => self.d = val,
-            3 => self.e = val,
-            4 => self.h = val,
-            5 => self.l = val,
-            6 => {
-                let addr = self.hl();
-                self.memory[addr] = val
-            }
-            7 => self.a = val,
-            _ => panic!("Invalid register number"),
-        }
-    }
-
-    pub fn get_register(&mut self, reg: u8) -> u8 {
-        match reg {
-            0 => self.b,
-            1 => self.c,
-            2 => self.d,
-            3 => self.e,
-            4 => self.h,
-            5 => self.l,
-            6 => self.at_hl(),
-            7 => self.a,
-            _ => panic!("Invalid register number"),
-        }
-    }
-
-    pub fn get_long(&self, op: u8) -> usize {
-        match (op >> 4) & 3 {
-            0 => self.bc(),
-            1 => self.de(),
-            2 => self.hl(),
-            3 => self.sp,
-            _ => panic!("Invalid long register"),
-        }
-    }
-
-    pub fn get_flag(&self, op: u8) -> bool {
-        if op & 1 == 1 {
-            return true;
-        }
-        let neg = op & (1 << 3) == 0;
-        let res = match (op >> 4) & 0b11 {
-            0 => self.fl.z,
-            1 => self.fl.cy,
-            2 => self.fl.p,
-            3 => self.fl.s,
-            _ => unreachable!(),
-        };
-        if neg {
-            !res
-        } else {
-            res
-        }
-    }
-
-    pub fn set_long(&mut self, op: u8, (low, high): (u8, u8)) {
-        match (op >> 4) & 3 {
-            0 => {
-                self.b = high;
-                self.c = low
-            }
-            1 => {
-                self.d = high;
-                self.e = low
-            }
-            2 => {
-                self.h = high;
-                self.l = low
-            }
-            3 => self.sp = usize::from(high) << 8 | usize::from(low),
-            _ => unreachable!(),
-        }
-    }
-
-    pub fn bc(&self) -> usize {
-        (usize::from(self.b) << 8) | usize::from(self.c)
-    }
-
-    pub fn de(&self) -> usize {
-        (usize::from(self.d) << 8) | usize::from(self.e)
-    }
-
-    pub fn hl(&self) -> usize {
-        (usize::from(self.h) << 8) | usize::from(self.l)
-    }
-
-    pub fn at_bc(&self) -> u8 {
-        let addr = self.bc();
-        self.memory[addr]
-    }
-
-    pub fn at_de(&self) -> u8 {
-        let addr = self.de();
-        self.memory[addr]
-    }
-
-    pub fn at_hl(&self) -> u8 {
-        let addr = self.hl();
-        self.memory[addr]
-    }
-
-    fn byte1(&self) -> u8 {
-        self.memory[self.pc]
-    }
-
-    fn byte2(&self) -> u8 {
-        self.memory[self.pc + 1]
-    }
-
-    fn word(&self) -> u16 {
-        self.word_at(self.pc)
-    }
-
-    fn word_at(&self, addr: usize) -> u16 {
-        (u16::from(self.memory[addr + 1]) << 8) | u16::from(self.memory[addr])
-    }
-
-    fn set_r(&mut self, res: u8) {
-        self.fl.z = res == 0;
-        self.fl.s = (res & 0x80) != 0;
-        self.fl.p = parity(res, self.fl.cy);
-    }
-
-    fn set_flags(&mut self, res: u16) {
-        self.set_r(res as u8);
-        self.fl.cy = res > 0xff;
-    }
-}
-
-pub struct Emu8080<T: InOutHandler> {
+#[derive(Default)]
+pub struct Emu8080<T: InOutHandler = DefaultHandler> {
     pub state: State8080,
     io: T,
+}
+
+impl<T: InOutHandler> Deref for Emu8080<T> {
+    type Target = State8080;
+
+    fn deref(&self) -> &Self::Target {
+        &self.state
+    }
+}
+
+impl<T: InOutHandler> DerefMut for Emu8080<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.state
+    }
 }
 
 type Instruction<T> = fn(&mut Emu8080<T>, u8) -> usize;
 
 impl<T: InOutHandler> Emu8080<T> {
-
     pub fn new(io_handler: T) -> Self {
         Emu8080 {
             state: State8080 {
@@ -247,18 +76,6 @@ impl<T: InOutHandler> Emu8080<T> {
         self.state.set_register(reg, val)
     }
 
-    pub fn get_register(&mut self, reg: u8) -> u8 {
-        self.state.get_register(reg)
-    }
-
-    pub fn get_long(&self, op: u8) -> usize {
-        self.state.get_long(op)
-    }
-
-    pub fn get_flag(&self, op: u8) -> bool {
-        self.state.get_flag(op)
-    }
-
     pub fn set_long(&mut self, op: u8, val: (u8, u8)) {
         self.state.set_long(op, val)
     }
@@ -268,136 +85,89 @@ impl<T: InOutHandler> Emu8080<T> {
         filename: &str,
         offset: usize,
     ) -> std::io::Result<usize> {
-        File::open(filename)?.read(&mut self.state.memory[offset..])
+        File::open(filename)?.read(&mut self.memory[offset..])
     }
 
     pub fn generate_interrupt(&mut self, interrupt_num: u8) {
-        if self.state.int_enable {
+        if self.int_enable {
             // println!("* Generating interrupt {}", interrupt_num);
-            self.state.int_enable = false;
-            self.push(self.state.pc as u16);
-            self.state.pc = usize::from(interrupt_num << 3);
+            self.int_enable = false;
+            self.push(self.pc as u16);
+            self.pc = usize::from(interrupt_num << 3);
         }
     }
 
-    pub fn bc(&self) -> usize {
-        self.state.bc()
-    }
-
-    pub fn de(&self) -> usize {
-        self.state.de()
-    }
-
-    pub fn hl(&self) -> usize {
-        self.state.hl()
-    }
-
-    pub fn at_bc(&self) -> u8 {
-        self.state.at_bc()
-    }
-
-    pub fn at_de(&self) -> u8 {
-        self.state.at_de()
-    }
-
-    pub fn at_hl(&self) -> u8 {
-        self.state.at_hl()
-    }
-
-    fn byte1(&self) -> u8 {
-        self.state.byte1()
-    }
-
-    fn byte2(&self) -> u8 {
-        self.state.byte2()
-    }
-
-    fn word(&self) -> u16 {
-        self.state.word()
-    }
-
-    fn word_at(&self, addr: usize) -> u16 {
-        self.state.word_at(addr)
-    }
-
-    fn set_r(&mut self, res: u8) {
-        self.state.set_r(res)
-    }
-
-    fn set_flags(&mut self, res: u16) {
-        self.state.set_flags(res)
-    }
-
     fn add(&mut self, val: u8) {
-        let ans = u16::from(self.state.a) + u16::from(val);
+        let ans = u16::from(self.a) + u16::from(val);
         self.set_flags(ans);
-        self.state.a = ans as u8;
+        self.a = ans as u8;
     }
 
     fn adc(&mut self, val: u8) {
-        let mut cy = if self.state.fl.cy { 1u8 } else { 0u8 };
+        let mut cy = if self.fl.cy { 1u8 } else { 0u8 };
         self.add(val);
-        if self.state.fl.cy {
+        if self.fl.cy {
             cy += 1
         };
         self.add(cy);
     }
 
     fn sub(&mut self, val: u8) {
-        let Wrapping(ans) = Wrapping(u16::from(self.state.a)) - Wrapping(u16::from(val));
+        let Wrapping(ans) = Wrapping(u16::from(self.a)) - Wrapping(u16::from(val));
         self.set_flags(ans);
-        self.state.a = ans as u8;
+        self.a = ans as u8;
     }
 
     fn sbb(&mut self, val: u8) {
-        let carry = Wrapping(if self.state.fl.cy { 1u8 } else { 0u8 });
+        let carry = Wrapping(if self.fl.cy { 1u8 } else { 0u8 });
         let Wrapping(rhs) = Wrapping(val) + carry;
         self.sub(rhs);
     }
 
     fn and(&mut self, val: u8) {
-        self.state.a &= val;
-        let temp = self.state.a;
+        self.a &= val;
+        let temp = self.a;
         self.set_r(temp);
     }
 
     fn xor(&mut self, val: u8) {
-        self.state.a ^= val;
-        let temp = self.state.a;
+        self.a ^= val;
+        let temp = self.a;
         self.set_r(temp);
     }
 
     fn or(&mut self, val: u8) {
-        self.state.a |= val;
-        let temp = self.state.a;
+        self.a |= val;
+        let temp = self.a;
         self.set_r(temp);
     }
 
     fn cmp(&mut self, val: u8) {
-        let ans = Wrapping(u16::from(self.state.a)) - Wrapping(u16::from(val));
+        let ans = Wrapping(u16::from(self.a)) - Wrapping(u16::from(val));
         self.set_flags(ans.0);
     }
 
     fn pop(&mut self) -> u16 {
-        let r = (u16::from(self.state.memory[self.state.sp + 1]) << 8) | u16::from(self.state.memory[self.state.sp]);
-        self.state.sp += 2;
+        let r = (u16::from(self.memory[self.sp + 1]) << 8) | u16::from(self.memory[self.sp]);
+        self.sp += 2;
         r
     }
 
     fn push(&mut self, val: u16) {
-        self.state.sp -= 2;
-        self.state.memory[self.state.sp] = (val & 0xff) as u8;
-        self.state.memory[self.state.sp + 1] = (val >> 8) as u8;
+        self.sp -= 2;
+        let sp = self.sp;
+        self.memory[sp] = (val & 0xff) as u8;
+        self.memory[sp + 1] = (val >> 8) as u8;
     }
 
     pub fn ret(&mut self) {
-        self.state.pc = usize::from(self.pop());
+        self.pc = usize::from(self.pop());
     }
 
     pub fn call(&mut self, addr: u16) {
-        let pc = self.state.pc as u16;
+        let pc = self.pc as u16;
         self.push(pc + 2);
-        self.state.pc = usize::from(addr);
+        self.pc = usize::from(addr);
     }
 
     fn call_instr(&mut self, op: u8) -> usize {
@@ -418,7 +188,7 @@ impl<T: InOutHandler> Emu8080<T> {
 
     fn jmp_instr(&mut self, op: u8) -> usize {
         if self.get_flag(op) {
-            self.state.pc = self.word() as usize;
+            self.pc = self.word() as usize;
             0
         } else {
             2
@@ -433,16 +203,16 @@ impl<T: InOutHandler> Emu8080<T> {
     fn ldax(&mut self, op: u8) -> usize {
         if op == 0x2A {
             let addr = self.word() as usize;
-            self.state.l = self.state.memory[addr];
-            self.state.h = self.state.memory[addr + 1];
+            self.l = self.memory[addr];
+            self.h = self.memory[addr + 1];
             2
         } else if op == 0x3A {
             let addr = self.word() as usize;
-            self.state.a = self.state.memory[addr];
+            self.a = self.memory[addr];
             2
         } else {
             let addr = self.get_long(op);
-            self.state.a = self.state.memory[addr];
+            self.a = self.memory[addr];
             0
         }
     }
@@ -451,16 +221,16 @@ impl<T: InOutHandler> Emu8080<T> {
         if op == 0x22 {
             // SHLD
             let addr = self.word();
-            self.state.memory[usize::from(addr)] = self.state.l;
-            self.state.memory[usize::from(addr + 1)] = self.state.h;
+            self.memory[usize::from(addr)] = self.l;
+            self.memory[usize::from(addr + 1)] = self.h;
             2
         } else if op == 0x32 {
             let addr = self.word() as usize;
-            self.state.memory[addr] = self.state.a;
+            self.memory[addr] = self.a;
             2
         } else {
             let addr = self.get_long(op);
-            self.state.memory[addr] = self.state.a;
+            self.memory[addr] = self.a;
             0
         }
     }
@@ -492,9 +262,9 @@ impl<T: InOutHandler> Emu8080<T> {
     }
 
     fn dad(&mut self, op: u8) -> usize {
-        let Wrapping(val) = Wrapping(self.state.hl()) + Wrapping(self.get_long(op));
+        let Wrapping(val) = Wrapping(self.hl()) + Wrapping(self.get_long(op));
         self.set_long(0x20, (val as u8, (val >> 8) as u8));
-        self.state.fl.cy = val > 0xFFFF;
+        self.fl.cy = val > 0xFFFF;
         0
     }
 
@@ -514,17 +284,17 @@ impl<T: InOutHandler> Emu8080<T> {
 
     fn add_instr(&mut self, op: u8) -> usize {
         let src = op & 0b111;
-        let val = u16::from(self.get_register(src)) + u16::from(self.state.a);
+        let val = u16::from(self.get_register(src)) + u16::from(self.a);
         self.set_flags(val);
-        self.state.a = val as u8;
+        self.a = val as u8;
         0
     }
 
     fn adc_instr(&mut self, op: u8) -> usize {
         let val = self.get_register(op & 0b111);
-        let mut cy = if self.state.fl.cy { 1u8 } else { 0u8 };
+        let mut cy = if self.fl.cy { 1u8 } else { 0u8 };
         self.add(val);
-        if self.state.fl.cy {
+        if self.fl.cy {
             cy += 1
         };
         self.add(cy);
@@ -539,7 +309,7 @@ impl<T: InOutHandler> Emu8080<T> {
 
     fn sbb_instr(&mut self, op: u8) -> usize {
         let val = self.get_register(op & 0b111);
-        let carry = Wrapping(if self.state.fl.cy { 1u8 } else { 0u8 });
+        let carry = Wrapping(if self.fl.cy { 1u8 } else { 0u8 });
         let Wrapping(rhs) = Wrapping(val) + carry;
         self.sub(rhs);
         0
@@ -573,12 +343,12 @@ impl<T: InOutHandler> Emu8080<T> {
         let val = self.pop();
         if op == 0xf1 {
             // POP PSW
-            self.state.a = (val >> 8) as u8;
-            self.state.fl.s = val & 0x80 > 0;
-            self.state.fl.z = val & 0x40 > 0;
-            self.state.fl.ac = val & 0x10 > 0;
-            self.state.fl.p = val & 0x04 > 0;
-            self.state.fl.cy = val & 0x01 > 0;
+            self.a = (val >> 8) as u8;
+            self.fl.s = val & 0x80 > 0;
+            self.fl.z = val & 0x40 > 0;
+            self.fl.ac = val & 0x10 > 0;
+            self.fl.p = val & 0x04 > 0;
+            self.fl.cy = val & 0x01 > 0;
         } else {
             self.set_long(op, (val as u8, (val >> 8) as u8));
         }
@@ -589,20 +359,20 @@ impl<T: InOutHandler> Emu8080<T> {
         let mut val;
         if op == 0xf5 {
             // PUSH PSW
-            val = u16::from(self.state.a) << 8;
-            if self.state.fl.s {
+            val = u16::from(self.a) << 8;
+            if self.fl.s {
                 val |= 0x80
             };
-            if self.state.fl.z {
+            if self.fl.z {
                 val |= 0x40
             };
-            if self.state.fl.ac {
+            if self.fl.ac {
                 val |= 0x10
             };
-            if self.state.fl.p {
+            if self.fl.p {
                 val |= 0x04
             };
-            if self.state.fl.cy {
+            if self.fl.cy {
                 val |= 0x01
             };
         } else {
@@ -638,27 +408,27 @@ impl<T: InOutHandler> Emu8080<T> {
         match op >> 3 {
             0 => {
                 // RLC
-                let bit = self.state.a >> 7;
-                self.state.a = (self.state.a << 1) | bit;
-                self.state.fl.cy = bit == 1;
+                let bit = self.a >> 7;
+                self.a = (self.a << 1) | bit;
+                self.fl.cy = bit == 1;
             }
             1 => {
                 // RRC
-                let bit = self.state.a << 7;
-                self.state.a = (self.state.a >> 1) | bit;
-                self.state.fl.cy = bit > 0;
+                let bit = self.a << 7;
+                self.a = (self.a >> 1) | bit;
+                self.fl.cy = bit > 0;
             }
             2 => {
                 // RAL
-                let prev_carry = if self.state.fl.cy { 1 } else { 0 };
-                self.state.fl.cy = (self.state.a >> 7) == 1;
-                self.state.a = (self.state.a << 1) | prev_carry;
+                let prev_carry = if self.fl.cy { 1 } else { 0 };
+                self.fl.cy = (self.a >> 7) == 1;
+                self.a = (self.a << 1) | prev_carry;
             }
             3 => {
                 // RAR
-                let prev_carry = if self.state.fl.cy { 1 } else { 0 };
-                self.state.fl.cy = (self.state.a & 1) == 1;
-                self.state.a = (self.state.a >> 1) | prev_carry;
+                let prev_carry = if self.fl.cy { 1 } else { 0 };
+                self.fl.cy = (self.a & 1) == 1;
+                self.a = (self.a >> 1) | prev_carry;
             }
             _ => panic!("Invalid rotation operation"),
         };
@@ -668,9 +438,9 @@ impl<T: InOutHandler> Emu8080<T> {
     fn flagop(&mut self, op: u8) -> usize {
         match (op >> 3) & 3 {
             0 => {}                        // DAA
-            1 => self.state.a = !self.state.a,         // CMA
-            2 => self.state.fl.cy = true,        // STC
-            3 => self.state.fl.cy = !self.state.fl.cy, // CMC
+            1 => self.a = !self.a,         // CMA
+            2 => self.fl.cy = true,        // STC
+            3 => self.fl.cy = !self.fl.cy, // CMC
             _ => unreachable!(),
         };
         0
@@ -718,18 +488,18 @@ impl<T: InOutHandler> Emu8080<T> {
         |emu, op| match (op >> 4) & 3 {
             0 => emu.jmp_instr(op),
             1 => {
-                emu.io.write(emu.byte1(), emu.state.a);
+                emu.io.write(emu.byte1(), emu.a);
                 1
             }
             2 => {
                 let val = emu.pop();
                 emu.push(emu.hl() as u16);
-                emu.state.h = (val >> 8) as u8;
-                emu.state.l = val as u8;
+                emu.h = (val >> 8) as u8;
+                emu.l = val as u8;
                 0
             }
             3 => {
-                emu.state.int_enable = false;
+                emu.int_enable = false;
                 0
             }
             _ => unreachable!(),
@@ -743,11 +513,11 @@ impl<T: InOutHandler> Emu8080<T> {
             0 => emu.ret_instr(op),
             1 => 0,
             2 => {
-                emu.state.pc = (usize::from(emu.state.h) << 8) | usize::from(emu.state.l);
+                emu.pc = (usize::from(emu.h) << 8) | usize::from(emu.l);
                 0
             }
             3 => {
-                emu.state.sp = emu.hl();
+                emu.sp = emu.hl();
                 0
             }
             _ => unreachable!(),
@@ -756,7 +526,7 @@ impl<T: InOutHandler> Emu8080<T> {
         |emu, op| match (op >> 4) & 3 {
             0 => 0,
             1 => {
-                emu.state.a = emu.io.read(emu.byte1());
+                emu.a = emu.io.read(emu.byte1());
                 1
             }
             2 => {
@@ -765,7 +535,7 @@ impl<T: InOutHandler> Emu8080<T> {
                 0
             }
             3 => {
-                emu.state.int_enable = true;
+                emu.int_enable = true;
                 0
             }
             _ => unreachable!(),
@@ -809,457 +579,31 @@ impl<T: InOutHandler> Emu8080<T> {
         Self::branch,     // 0xf0..0xf8
         Self::branch,     // 0xf8..0x100
     ];
-}
 
-fn disassemble8080_op(codebuffer: &[u8], pc: usize) -> usize {
-    let code = &codebuffer[pc..];
-    let mut opbytes = 1;
-    print!("{:04X} {:02X} ", pc, code[0]);
-    match code[0] {
-        0x00 => print!("NOP"),
-        0x01 => {
-            print!("LXI    B,#${:02X}{:02X}", code[2], code[1]);
-            opbytes = 3;
-        }
-        0x02 => print!("STAX   B"),
-        0x03 => print!("INX   B"),
-        0x04 => print!("INR   B"),
-        0x05 => print!("DCR   B"),
-        0x06 => {
-            print!("MVI    B,#${:02X}", code[1]);
-            opbytes = 2;
-        }
-        0x07 => print!("RLC"),
+    pub fn step(&mut self) -> i32 {
+        assert!(self.pc < self.memory.len());
+        let opcode = self.memory[self.pc];
 
-        0x08 => print!("NOP"),
-        0x09 => print!("DAD   B"),
-        0x0a => print!("LDAX   B"),
-        0x0b => print!("DCX   C"),
-        0x0c => print!("INR   C"),
-        0x0d => print!("DCR   C"),
-        0x0e => {
-            print!("MVI    C,#${:02X}", code[1]);
-            opbytes = 2;
-        }
-        0x0f => print!("RRC"),
+        self.pc += 1;
+        self.pc += Self::INSTR_COMPACT[(opcode >> 3) as usize](self, opcode);
 
-        0x10 => print!("NOP"),
-        0x11 => {
-            print!("LXI    D,#${:02X}{:02X}", code[2], code[1]);
-            opbytes = 3;
-        }
-        0x12 => print!("STAX   D"),
-        0x13 => print!("INX   D"),
-        0x14 => print!("INR   D"),
-        0x15 => print!("DCR   D"),
-        0x16 => {
-            print!("MVI    D,#${:02X}", code[1]);
-            opbytes = 2;
-        }
-        0x17 => print!("RAL"),
-
-        0x18 => print!("NOP"),
-        0x19 => print!("DAD   D"),
-        0x1a => print!("LDAX   D"),
-        0x1b => print!("DCX   D"),
-        0x1c => print!("INR   E"),
-        0x1d => print!("DCR   E"),
-        0x1e => {
-            print!("MVI    E,#${:02X}", code[1]);
-            opbytes = 2;
-        }
-        0x1f => print!("RAR"),
-
-        0x20 => print!("NOP"),
-        0x21 => {
-            print!("LXI    H,#${:02X}{:02X}", code[2], code[1]);
-            opbytes = 3;
-        }
-        0x22 => {
-            print!("SHLD   ${:02X}{:02X}", code[2], code[1]);
-            opbytes = 3;
-        }
-        0x23 => print!("INX   H"),
-        0x24 => print!("INR   H"),
-        0x25 => print!("DCR   H"),
-        0x26 => {
-            print!("MVI    H,#${:02X}", code[1]);
-            opbytes = 2;
-        }
-        0x27 => print!("DAA"),
-
-        0x28 => print!("NOP"),
-        0x29 => print!("DAD   H"),
-        0x2a => {
-            print!("LHLD   ${:02X}{:02X}", code[2], code[1]);
-            opbytes = 3;
-        }
-        0x2b => print!("DCX    H"),
-        0x2c => print!("INR   L"),
-        0x2d => print!("DCR   L"),
-        0x2e => {
-            print!("MVI    L,#${:02X}", code[1]);
-            opbytes = 2;
-        }
-        0x2f => print!("CMA"),
-
-        0x30 => print!("NOP"),
-        0x31 => {
-            print!("LXI   SP,#${:02X}{:02X}", code[2], code[1]);
-            opbytes = 3;
-        }
-        0x32 => {
-            print!("STA   ${:02X}{:02X}", code[2], code[1]);
-            opbytes = 3;
-        }
-        0x33 => print!("INX  SP"),
-        0x34 => print!("INR   M"),
-        0x35 => print!("DCR   M"),
-        0x36 => {
-            print!("MVI    M,#${:02X}", code[1]);
-            opbytes = 2;
-        }
-        0x37 => print!("STC"),
-
-        0x38 => print!("NOP"),
-        0x39 => print!("DAD  SP"),
-        0x3a => {
-            print!("LDA    ${:02X}{:02X}", code[2], code[1]);
-            opbytes = 3;
-        }
-        0x3b => print!("DCX   SP"),
-        0x3c => print!("INR   A"),
-        0x3d => print!("DCR   A"),
-        0x3e => {
-            print!("MVI    A,#${:02X}", code[1]);
-            opbytes = 2;
-        }
-        0x3f => print!("CMC"),
-
-        0x40 => print!("MOV   B,B"),
-        0x41 => print!("MOV   B,C"),
-        0x42 => print!("MOV   B,D"),
-        0x43 => print!("MOV   B,E"),
-        0x44 => print!("MOV   B,H"),
-        0x45 => print!("MOV   B,L"),
-        0x46 => print!("MOV   B,M"),
-        0x47 => print!("MOV   B,A"),
-        0x48 => print!("MOV   C,B"),
-        0x49 => print!("MOV   C,C"),
-        0x4a => print!("MOV   C,D"),
-        0x4b => print!("MOV   C,E"),
-        0x4c => print!("MOV   C,H"),
-        0x4d => print!("MOV   C,L"),
-        0x4e => print!("MOV   C,M"),
-        0x4f => print!("MOV   C,A"),
-
-        0x50 => print!("MOV   D,B"),
-        0x51 => print!("MOV   D,C"),
-        0x52 => print!("MOV   D,D"),
-        0x53 => print!("MOV   D,E"),
-        0x54 => print!("MOV   D,H"),
-        0x55 => print!("MOV   D,L"),
-        0x56 => print!("MOV   D,M"),
-        0x57 => print!("MOV   D,A"),
-        0x58 => print!("MOV   E,B"),
-        0x59 => print!("MOV   E,C"),
-        0x5a => print!("MOV   E,D"),
-        0x5b => print!("MOV   E,E"),
-        0x5c => print!("MOV   E,H"),
-        0x5d => print!("MOV   E,L"),
-        0x5e => print!("MOV   E,M"),
-        0x5f => print!("MOV   E,A"),
-
-        0x60 => print!("MOV   H,B"),
-        0x61 => print!("MOV   H,C"),
-        0x62 => print!("MOV   H,D"),
-        0x63 => print!("MOV   H,E"),
-        0x64 => print!("MOV   H,H"),
-        0x65 => print!("MOV   H,L"),
-        0x66 => print!("MOV   H,M"),
-        0x67 => print!("MOV   H,A"),
-        0x68 => print!("MOV   L,B"),
-        0x69 => print!("MOV   L,C"),
-        0x6a => print!("MOV   L,D"),
-        0x6b => print!("MOV   L,E"),
-        0x6c => print!("MOV   L,H"),
-        0x6d => print!("MOV   L,L"),
-        0x6e => print!("MOV   L,M"),
-        0x6f => print!("MOV   L,A"),
-
-        0x70 => print!("MOV   M,B"),
-        0x71 => print!("MOV   M,C"),
-        0x72 => print!("MOV   M,D"),
-        0x73 => print!("MOV   M,E"),
-        0x74 => print!("MOV   M,H"),
-        0x75 => print!("MOV   M,L"),
-        0x76 => print!("HLT"),
-        0x77 => print!("MOV   M,A"),
-        0x78 => print!("MOV   A,B"),
-        0x79 => print!("MOV   A,C"),
-        0x7a => print!("MOV   A,D"),
-        0x7b => print!("MOV   A,E"),
-        0x7c => print!("MOV   A,H"),
-        0x7d => print!("MOV   A,L"),
-        0x7e => print!("MOV   A,M"),
-        0x7f => print!("MOV   A,A"),
-
-        0x80 => print!("ADD   B"),
-        0x81 => print!("ADD   C"),
-        0x82 => print!("ADD   D"),
-        0x83 => print!("ADD   E"),
-        0x84 => print!("ADD   H"),
-        0x85 => print!("ADD   L"),
-        0x86 => print!("ADD   M"),
-        0x87 => print!("ADD   A"),
-        0x88 => print!("ADC   B"),
-        0x89 => print!("ADC   C"),
-        0x8a => print!("ADC   D"),
-        0x8b => print!("ADC   E"),
-        0x8c => print!("ADC   H"),
-        0x8d => print!("ADC   L"),
-        0x8e => print!("ADC   M"),
-        0x8f => print!("ADC   A"),
-
-        0x90 => print!("SUB   B"),
-        0x91 => print!("SUB   C"),
-        0x92 => print!("SUB   D"),
-        0x93 => print!("SUB   E"),
-        0x94 => print!("SUB   H"),
-        0x95 => print!("SUB   L"),
-        0x96 => print!("SUB   M"),
-        0x97 => print!("SUB   A"),
-        0x98 => print!("SBB   B"),
-        0x99 => print!("SBB   C"),
-        0x9a => print!("SBB   D"),
-        0x9b => print!("SBB   E"),
-        0x9c => print!("SBB   H"),
-        0x9d => print!("SBB   L"),
-        0x9e => print!("SBB   M"),
-        0x9f => print!("SBB   A"),
-
-        0xa0 => print!("ANA   B"),
-        0xa1 => print!("ANA   C"),
-        0xa2 => print!("ANA   D"),
-        0xa3 => print!("ANA   E"),
-        0xa4 => print!("ANA   H"),
-        0xa5 => print!("ANA   L"),
-        0xa6 => print!("ANA   M"),
-        0xa7 => print!("ANA   A"),
-        0xa8 => print!("XRA   B"),
-        0xa9 => print!("XRA   C"),
-        0xaa => print!("XRA   D"),
-        0xab => print!("XRA   E"),
-        0xac => print!("XRA   H"),
-        0xad => print!("XRA   L"),
-        0xae => print!("XRA   M"),
-        0xaf => print!("XRA   A"),
-
-        0xb0 => print!("ORA   B"),
-        0xb1 => print!("ORA   C"),
-        0xb2 => print!("ORA   D"),
-        0xb3 => print!("ORA   E"),
-        0xb4 => print!("ORA   H"),
-        0xb5 => print!("ORA   L"),
-        0xb6 => print!("ORA   M"),
-        0xb7 => print!("ORA   A"),
-        0xb8 => print!("CMP   B"),
-        0xb9 => print!("CMP   C"),
-        0xba => print!("CMP   D"),
-        0xbb => print!("CMP   E"),
-        0xbc => print!("CMP   H"),
-        0xbd => print!("CMP   L"),
-        0xbe => print!("CMP   M"),
-        0xbf => print!("CMP   A"),
-
-        0xc0 => print!("RNZ"),
-        0xc1 => print!("POP   B"),
-        0xc2 => {
-            print!("JNZ    ${:02X}{:02X}", code[2], code[1]);
-            opbytes = 3;
-        }
-        0xc3 => {
-            print!("JMP    ${:02X}{:02X}", code[2], code[1]);
-            opbytes = 3;
-        }
-        0xc4 => {
-            print!("CNZ    ${:02X}{:02X}", code[2], code[1]);
-            opbytes = 3;
-        }
-        0xc5 => print!("PUSH  B"),
-        0xc6 => {
-            print!("ADI    #${:02X}", code[1]);
-            opbytes = 2;
-        }
-        0xc7 => print!("RST   0"),
-        0xc8 => print!("RZ"),
-        0xc9 => print!("RET"),
-        0xca => {
-            print!("JZ     ${:02X}{:02X}", code[2], code[1]);
-            opbytes = 3;
-        }
-        0xcb => print!("NOP"),
-        0xcc => {
-            print!("CZ     ${:02X}{:02X}", code[2], code[1]);
-            opbytes = 3;
-        }
-        0xcd => {
-            print!("CALL   ${:02X}{:02X}", code[2], code[1]);
-            opbytes = 3;
-        }
-        0xce => {
-            print!("ACI    #${:02X}", code[1]);
-            opbytes = 2;
-        }
-        0xcf => print!("RST   1"),
-
-        0xd0 => print!("RNC"),
-        0xd1 => print!("POP   D"),
-        0xd2 => {
-            print!("JNC    ${:02X}{:02X}", code[2], code[1]);
-            opbytes = 3;
-        }
-        0xd3 => {
-            print!("OUT    #${:02X}", code[1]);
-            opbytes = 2;
-        }
-        0xd4 => {
-            print!("CNC    ${:02X}{:02X}", code[2], code[1]);
-            opbytes = 3;
-        }
-        0xd5 => print!("PUSH  D"),
-        0xd6 => {
-            print!("SUI    #${:02X}", code[1]);
-            opbytes = 2;
-        }
-        0xd7 => print!("RST   2"),
-        0xd8 => print!("RC"),
-        0xd9 => print!("RET"),
-        0xda => {
-            print!("JC     ${:02X}{:02X}", code[2], code[1]);
-            opbytes = 3;
-        }
-        0xdb => {
-            print!("IN     #${:02X}{:02X}", code[2], code[1]);
-            opbytes = 2;
-        }
-        0xdc => {
-            print!("CC     ${:02X}{:02X}", code[2], code[1]);
-            opbytes = 3;
-        }
-        0xdd => {
-            print!("CALL   ${:02X}{:02X}", code[2], code[1]);
-            opbytes = 3;
-        }
-        0xde => {
-            print!("SBI    #${:02X}", code[1]);
-            opbytes = 2;
-        }
-        0xdf => print!("RST   3"),
-
-        0xe0 => print!("RPO"),
-        0xe1 => print!("POP   H"),
-        0xe2 => {
-            print!("JPO    ${:02X}{:02X}", code[2], code[1]);
-            opbytes = 3;
-        }
-        0xe3 => print!("XTHL"),
-        0xe4 => {
-            print!("CPO    ${:02X}{:02X}", code[2], code[1]);
-            opbytes = 3;
-        }
-        0xe5 => print!("PUSH  H"),
-        0xe6 => {
-            print!("ANI    #${:02X}", code[1]);
-            opbytes = 2;
-        }
-        0xe7 => print!("RST   4"),
-        0xe8 => print!("RPE"),
-        0xe9 => print!("PCHL"),
-        0xea => {
-            print!("JPE    ${:02X}{:02X}", code[2], code[1]);
-            opbytes = 3;
-        }
-        0xeb => print!("XCHG"),
-        0xec => {
-            print!("CPE    ${:02X}{:02X}", code[2], code[1]);
-            opbytes = 3;
-        }
-        0xed => {
-            print!("CALL   ${:02X}{:02X}", code[2], code[1]);
-            opbytes = 3;
-        }
-        0xee => {
-            print!("XRI    #${:02X}", code[1]);
-            opbytes = 2;
-        }
-        0xef => print!("RST   5"),
-
-        0xf0 => print!("RP"),
-        0xf1 => print!("POP   PSW"),
-        0xf2 => {
-            print!("JP     ${:02X}{:02X}", code[2], code[1]);
-            opbytes = 3;
-        }
-        0xf3 => print!("DI"),
-        0xf4 => {
-            print!("CP     ${:02X}{:02X}", code[2], code[1]);
-            opbytes = 3;
-        }
-        0xf5 => print!("PUSH  PSW"),
-        0xf6 => {
-            print!("ORI    #${:02X}", code[1]);
-            opbytes = 2;
-        }
-        0xf7 => print!("RST   6"),
-        0xf8 => print!("RM"),
-        0xf9 => print!("SPHL"),
-        0xfa => {
-            print!("JM     ${:02X}{:02X}", code[2], code[1]);
-            opbytes = 3;
-        }
-        0xfb => print!("EI"),
-        0xfc => {
-            print!("CM     ${:02X}{:02X}", code[2], code[1]);
-            opbytes = 3;
-        }
-        0xfd => {
-            print!("CALL   ${:02X}{:02X}", code[2], code[1]);
-            opbytes = 3;
-        }
-        0xfe => {
-            print!("CPI    #${:02X}", code[1]);
-            opbytes = 2;
-        }
-        0xff => print!("RST   7"),
+        0
     }
 
-    println!();
+    pub fn step_dis(&mut self) -> i32 {
+        disassemble8080_op(&self.memory, self.pc);
 
-    opbytes
-}
+        let res = self.step();
 
-pub fn emulate8080<T: InOutHandler>(emu: &mut Emu8080<T>, dis: bool) -> i32 {
-    assert!(emu.state.pc < emu.state.memory.len());
-    let opcode = emu.state.memory[emu.state.pc];
-    if dis {
-        disassemble8080_op(&emu.state.memory, emu.state.pc);
-    }
-
-    emu.state.pc += 1;
-    // let func = emu.state.instructions[opcode as usize];
-    emu.state.pc += Emu8080::<T>::INSTR_COMPACT[(opcode >> 3) as usize](emu, opcode);
-
-    if dis {
         println!(
             "Registers: A: {:02X} BC: {:02X}{:02X} DE: {:02X}{:02X} HL: {:02X}{:02X}, SP: {:02X}",
-            emu.state.a, emu.state.b, emu.state.c, emu.state.d, emu.state.e, emu.state.h, emu.state.l, emu.state.sp,
+            self.a, self.b, self.c, self.d, self.e, self.h, self.l, self.sp,
         );
         println!(
             "Flags: s: {} z: {} p: {} cy: {}",
-            emu.state.fl.s, emu.state.fl.z, emu.state.fl.p, emu.state.fl.cy
+            self.fl.s, self.fl.z, self.fl.p, self.fl.cy
         );
-    }
 
-    0
+        res
+    }
 }
