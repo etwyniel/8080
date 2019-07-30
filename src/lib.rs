@@ -202,6 +202,7 @@ impl<T: InOutHandler> Emu8080<T> {
 
     fn ldax(&mut self, op: u8) -> usize {
         if op == 0x2A {
+            // LHLD
             let addr = self.word() as usize;
             self.l = self.memory[addr];
             self.h = self.memory[addr + 1];
@@ -245,6 +246,7 @@ impl<T: InOutHandler> Emu8080<T> {
         let reg = (op >> 3) & 7;
         let Wrapping(val) = Wrapping(self.get_register(reg)) + Wrapping(1);
         self.set_register(reg, val);
+        self.set_r(val);
         0
     }
 
@@ -252,6 +254,7 @@ impl<T: InOutHandler> Emu8080<T> {
         let reg = (op >> 3) & 7;
         let Wrapping(val) = Wrapping(self.get_register(reg)) - Wrapping(1);
         self.set_register(reg, val);
+        self.set_r(val);
         0
     }
 
