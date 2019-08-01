@@ -115,7 +115,7 @@ impl State8080 {
         if op & 1 == 1 {
             return true;
         }
-        let neg = op & (1 << 3) == 0;
+        let neg = op & 0b1000 == 0;
         let res = match (op >> 4) & 0b11 {
             0 => self.fl.z,
             1 => self.fl.cy,

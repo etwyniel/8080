@@ -173,31 +173,39 @@ impl<T: InOutHandler> Emu8080<T> {
     fn call_instr(&mut self, op: u8) -> usize {
         if self.get_flag(op) {
             self.call(self.word());
-            0
+            17
         } else {
-            2
+            self.pc += 2;
+            11
         }
     }
 
     fn ret_instr(&mut self, op: u8) -> usize {
         if self.get_flag(op) {
             self.ret();
+            if op & 0b1 == 1 {
+                10
+            } else {
+                11
+            }
+        } else {
+            5
         }
-        0
     }
 
     fn jmp_instr(&mut self, op: u8) -> usize {
         if self.get_flag(op) {
             self.pc = self.word() as usize;
-            0
         } else {
-            2
+            self.pc += 2;
         }
+        10
     }
 
     fn lxi(&mut self, op: u8) -> usize {
         self.set_long(op, (self.byte1(), self.byte2()));
-        2
+        self.pc += 2;
+        10
     }
 
     fn ldax(&mut self, op: u8) -> usize {
@@ -206,15 +214,17 @@ impl<T: InOutHandler> Emu8080<T> {
             let addr = self.word() as usize;
             self.l = self.memory[addr];
             self.h = self.memory[addr + 1];
-            2
+            self.pc += 2;
+            16
         } else if op == 0x3A {
             let addr = self.word() as usize;
             self.a = self.memory[addr];
-            2
+            self.pc += 2;
+            13
         } else {
             let addr = self.get_long(op);
             self.a = self.memory[addr];
-            0
+            7
         }
     }
 
@@ -224,22 +234,24 @@ impl<T: InOutHandler> Emu8080<T> {
             let addr = self.word();
             self.memory[usize::from(addr)] = self.l;
             self.memory[usize::from(addr + 1)] = self.h;
-            2
+            self.pc += 2;
+            16
         } else if op == 0x32 {
             let addr = self.word() as usize;
             self.memory[addr] = self.a;
-            2
+            self.pc += 2;
+            13
         } else {
             let addr = self.get_long(op);
             self.memory[addr] = self.a;
-            0
+            7
         }
     }
 
     fn inx(&mut self, op: u8) -> usize {
         let val = self.get_long(op) + 1;
         self.set_long(op, (val as u8, (val >> 8) as u8));
-        0
+        5
     }
 
     fn inr(&mut self, op: u8) -> usize {
@@ -247,7 +259,7 @@ impl<T: InOutHandler> Emu8080<T> {
         let Wrapping(val) = Wrapping(self.get_register(reg)) + Wrapping(1);
         self.set_register(reg, val);
         self.set_r(val);
-        0
+        5
     }
 
     fn dcr(&mut self, op: u8) -> usize {
@@ -255,45 +267,63 @@ impl<T: InOutHandler> Emu8080<T> {
         let Wrapping(val) = Wrapping(self.get_register(reg)) - Wrapping(1);
         self.set_register(reg, val);
         self.set_r(val);
-        0
+        5
     }
 
     fn mvi(&mut self, op: u8) -> usize {
         let reg = (op >> 3) & 7;
         self.set_register(reg, self.byte1());
-        1
+        self.pc += 1;
+        if reg == 6 {
+            10
+        } else {
+            7
+        }
     }
 
     fn dad(&mut self, op: u8) -> usize {
         let Wrapping(val) = Wrapping(self.hl()) + Wrapping(self.get_long(op));
         self.set_long(0x20, (val as u8, (val >> 8) as u8));
         self.fl.cy = val > 0xFFFF;
-        0
+        10
     }
 
     fn dcx(&mut self, op: u8) -> usize {
         let Wrapping(val) = Wrapping(self.get_long(op)) - Wrapping(1);
         self.set_long(op, (val as u8, (val >> 8) as u8));
-        0
+        5
     }
 
     fn mov(&mut self, op: u8) -> usize {
+        if op == 0x76 {
+            // HLT
+            return 0;
+        }
         let src = op & 0b111;
         let dst = (op >> 3) & 0b111;
         let val = self.get_register(src);
         self.set_register(dst, val);
-        0
+        if src == 6 || dst == 6 {
+            7
+        } else {
+            5
+        }
     }
 
     fn add_instr(&mut self, op: u8) -> usize {
-        let src = op & 0b111;
-        let val = u16::from(self.get_register(src)) + u16::from(self.a);
+        let reg = op & 0b111;
+        let val = u16::from(self.get_register(reg)) + u16::from(self.a);
         self.set_flags(val);
         self.a = val as u8;
-        0
+        if reg == 6 {
+            7
+        } else {
+            4
+        }
     }
 
     fn adc_instr(&mut self, op: u8) -> usize {
+        let reg = op & 0b111;
         let val = self.get_register(op & 0b111);
         let mut cy = if self.fl.cy { 1u8 } else { 0u8 };
         self.add(val);
@@ -301,45 +331,79 @@ impl<T: InOutHandler> Emu8080<T> {
             cy += 1
         };
         self.add(cy);
-        0
+        if reg == 6 {
+            7
+        } else {
+            4
+        }
     }
 
     fn sub_instr(&mut self, op: u8) -> usize {
-        let val = self.get_register(op & 0b111);
+        let reg = op & 0b111;
+        let val = self.get_register(reg);
         self.sub(val);
-        0
+        if reg == 6 {
+            7
+        } else {
+            4
+        }
     }
 
     fn sbb_instr(&mut self, op: u8) -> usize {
-        let val = self.get_register(op & 0b111);
+        let reg = op & 0b111;
+        let val = self.get_register(reg);
         let carry = Wrapping(if self.fl.cy { 1u8 } else { 0u8 });
         let Wrapping(rhs) = Wrapping(val) + carry;
         self.sub(rhs);
-        0
+        if reg == 6 {
+            7
+        } else {
+            4
+        }
     }
 
     fn and_instr(&mut self, op: u8) -> usize {
-        let val = self.get_register(op & 0b111);
+        let reg = op & 0b111;
+        let val = self.get_register(reg);
         self.and(val);
-        0
+        if reg == 6 {
+            7
+        } else {
+            4
+        }
     }
 
     fn xor_instr(&mut self, op: u8) -> usize {
-        let val = self.get_register(op & 0b111);
+        let reg = op & 0b111;
+        let val = self.get_register(reg);
         self.xor(val);
-        0
+        if reg == 6 {
+            7
+        } else {
+            4
+        }
     }
 
     fn or_instr(&mut self, op: u8) -> usize {
-        let val = self.get_register(op & 0b111);
+        let reg = op & 0b111;
+        let val = self.get_register(reg);
         self.or(val);
-        0
+        if reg == 6 {
+            7
+        } else {
+            4
+        }
     }
 
     fn cmp_instr(&mut self, op: u8) -> usize {
-        let val = self.get_register(op & 0b111);
+        let reg = op & 0b111;
+        let val = self.get_register(reg);
         self.cmp(val);
-        0
+        if reg == 6 {
+            7
+        } else {
+            4
+        }
     }
 
     fn pop_instr(&mut self, op: u8) -> usize {
@@ -355,7 +419,7 @@ impl<T: InOutHandler> Emu8080<T> {
         } else {
             self.set_long(op, (val as u8, (val >> 8) as u8));
         }
-        0
+        10
     }
 
     fn push_instr(&mut self, op: u8) -> usize {
@@ -382,13 +446,13 @@ impl<T: InOutHandler> Emu8080<T> {
             val = self.get_long(op) as u16;
         }
         self.push(val);
-        0
+        11
     }
 
     fn rst(&mut self, op: u8) -> usize {
         let num = (op >> 3) & 0b111;
         self.generate_interrupt(num);
-        0
+        11
     }
 
     fn assignment(&mut self, op: u8) -> usize {
@@ -435,7 +499,7 @@ impl<T: InOutHandler> Emu8080<T> {
             }
             _ => panic!("Invalid rotation operation"),
         };
-        0
+        4
     }
 
     fn flagop(&mut self, op: u8) -> usize {
@@ -446,7 +510,7 @@ impl<T: InOutHandler> Emu8080<T> {
             3 => self.fl.cy = !self.fl.cy, // CMC
             _ => unreachable!(),
         };
-        0
+        4
     }
 
     fn immediate(&mut self, op: u8) -> usize {
@@ -462,11 +526,12 @@ impl<T: InOutHandler> Emu8080<T> {
             7 => self.cmp(val),
             _ => unreachable!(),
         };
-        1
+        self.pc += 1;
+        7
     }
     const ASSIGNMENTS: [Instruction<T>; 16] = [
         // NOP
-        |_, _| 0,               // 0x0
+        |_, _| 4,               // 0x0
         Self::lxi,              // 0x1
         Self::stax,             // 0x2
         Self::inx,              // 0x3
@@ -475,7 +540,7 @@ impl<T: InOutHandler> Emu8080<T> {
         Self::mvi,              // 0x6
         Self::assignment_extra, // 0x7
         // NOP
-        |_, _| 0,               // 0x8
+        |_, _| 4,               // 0x8
         Self::dad,              // 0x9
         Self::ldax,             // 0xa
         Self::dcx,              // 0xb
@@ -492,18 +557,19 @@ impl<T: InOutHandler> Emu8080<T> {
             0 => emu.jmp_instr(op),
             1 => {
                 emu.io.write(emu.byte1(), emu.a);
-                1
+                emu.pc += 1;
+                10
             }
             2 => {
                 let val = emu.pop();
                 emu.push(emu.hl() as u16);
                 emu.h = (val >> 8) as u8;
                 emu.l = val as u8;
-                0
+                18
             }
             3 => {
                 emu.int_enable = false;
-                0
+                4
             }
             _ => unreachable!(),
         }, // 0x3
@@ -514,32 +580,33 @@ impl<T: InOutHandler> Emu8080<T> {
         Self::ret_instr, // 0x8
         |emu, op| match (op >> 4) & 3 {
             0 => emu.ret_instr(op),
-            1 => 0,
+            1 => 10,
             2 => {
                 emu.pc = (usize::from(emu.h) << 8) | usize::from(emu.l);
-                0
+                5
             }
             3 => {
                 emu.sp = emu.hl();
-                0
+                5
             }
             _ => unreachable!(),
         }, // 0x9
         Self::jmp_instr, // 0xa
         |emu, op| match (op >> 4) & 3 {
-            0 => 0,
+            0 => 10,
             1 => {
                 emu.a = emu.io.read(emu.byte1());
-                1
+                emu.pc += 1;
+                10
             }
             2 => {
                 std::mem::swap(&mut emu.state.d, &mut emu.state.h);
                 std::mem::swap(&mut emu.state.e, &mut emu.state.l);
-                0
+                5
             }
             3 => {
                 emu.int_enable = true;
-                0
+                4
             }
             _ => unreachable!(),
         }, // 0xb
@@ -548,52 +615,29 @@ impl<T: InOutHandler> Emu8080<T> {
         Self::immediate, // 0xe
         Self::rst,       // 0xf
     ];
-    const INSTR_COMPACT: [Instruction<T>; 32] = [
-        Self::assignment, // 0x00..0x08
-        Self::assignment, // 0x08..0x10
-        Self::assignment, // 0x10..0x18
-        Self::assignment, // 0x18..0x20
-        Self::assignment, // 0x20..0x28
-        Self::assignment, // 0x28..0x30
-        Self::assignment, // 0x30..0x38
-        Self::assignment, // 0x38..0x40
-        Self::mov,        // 0x40..0x48
-        Self::mov,        // 0x48..0x50
-        Self::mov,        // 0x50..0x58
-        Self::mov,        // 0x58..0x60
-        Self::mov,        // 0x60..0x68
-        Self::mov,        // 0x68..0x70
-        Self::mov,        // 0x70..0x78
-        Self::mov,        // 0x78..0x80
-        Self::add_instr,  // 0x80..0x88
-        Self::adc_instr,  // 0x88..0x90
-        Self::sub_instr,  // 0x90..0x98
-        Self::sbb_instr,  // 0x98..0xa0
-        Self::and_instr,  // 0xa0..0xa8
-        Self::xor_instr,  // 0xa8..0xb0
-        Self::or_instr,   // 0xb0..0xb8
-        Self::cmp_instr,  // 0xb8..0xc0
-        Self::branch,     // 0xc0..0xc8
-        Self::branch,     // 0xc8..0xd0
-        Self::branch,     // 0xd0..0xd8
-        Self::branch,     // 0xd8..0xe0
-        Self::branch,     // 0xe0..0xe8
-        Self::branch,     // 0xe8..0xf0
-        Self::branch,     // 0xf0..0xf8
-        Self::branch,     // 0xf8..0x100
-    ];
 
-    pub fn step(&mut self) -> i32 {
+    pub fn step(&mut self) -> usize {
         assert!(self.pc < self.memory.len());
         let opcode = self.memory[self.pc];
 
         self.pc += 1;
-        self.pc += Self::INSTR_COMPACT[(opcode >> 3) as usize](self, opcode);
-
-        0
+        let f = match opcode {
+            0x00..=0x3f => Self::assignment,
+            0x40..=0x7f => Self::mov,
+            0x80..=0x87 => Self::add_instr,
+            0x88..=0x8f => Self::adc_instr,
+            0x90..=0x97 => Self::sub_instr,
+            0x98..=0x9f => Self::sbb_instr,
+            0xa0..=0xa7 => Self::and_instr,
+            0xa8..=0xaf => Self::xor_instr,
+            0xb0..=0xb7 => Self::or_instr,
+            0xb8..=0xbf => Self::cmp_instr,
+            0xc0..=0xff => Self::branch,
+        };
+        f(self, opcode)
     }
 
-    pub fn step_dis(&mut self) -> i32 {
+    pub fn step_dis(&mut self) -> usize {
         disassemble8080_op(&self.memory, self.pc);
 
         let res = self.step();

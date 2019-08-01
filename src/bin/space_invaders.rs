@@ -1,8 +1,38 @@
 use emulator::*;
 use sdl2::{
-    event::Event, keyboard::Keycode, pixels::Color, rect::Point, render::Canvas, video::Window,
+    event::Event,
+    keyboard::Keycode,
+    pixels::{Color, Palette, PixelFormatEnum},
+    surface::Surface,
 };
 use std::{env::args, time};
+
+const COLORS: [Color; 4] = [
+    Color {
+        r: 0x00,
+        g: 0x00,
+        b: 0x00,
+        a: 0xff,
+    },
+    Color {
+        r: 0xff,
+        g: 0xff,
+        b: 0xff,
+        a: 0xff,
+    },
+    Color {
+        r: 0x00,
+        g: 0xff,
+        b: 0x00,
+        a: 0xff,
+    },
+    Color {
+        r: 0xff,
+        g: 0x00,
+        b: 0x00,
+        a: 0xff,
+    },
+];
 
 #[derive(Default)]
 struct SpaceInvadersInOut {
@@ -36,19 +66,21 @@ impl InOutHandler for SpaceInvadersInOut {
 const WINDOW_WIDTH: usize = 224;
 const WINDOW_HEIGHT: usize = 256;
 
-fn display_window(display_buffer: &[u8], canvas: &mut Canvas<Window>) {
+fn display_window(display_buffer: &[u8], surface: &mut Surface) {
+    let pitch = surface.pitch() as usize;
+    let dest_pixels = surface
+        .without_lock_mut()
+        .expect("Could not retrieve surface pixels");
     for x in 0..WINDOW_WIDTH {
         for y in 0..(WINDOW_HEIGHT / 8) {
             let pixels = display_buffer[x * WINDOW_HEIGHT / 8 + y];
             for i in 0..8 {
+                let line = WINDOW_HEIGHT - y * 8 - i - 1;
                 if pixels & (1 << i) > 0 {
-                    canvas.set_draw_color(Color::RGB(255, 255, 255));
+                    dest_pixels[line * pitch + x] = 1;
                 } else {
-                    canvas.set_draw_color(Color::RGB(0, 0, 0));
+                    dest_pixels[line * pitch + x] = 0;
                 }
-                canvas
-                    .draw_point(Point::new(x as i32, (WINDOW_HEIGHT - y * 8 - i - 1) as i32))
-                    .unwrap();
             }
         }
     }
@@ -63,10 +95,18 @@ fn main() {
         std::process::exit(1);
     }
 
-    let mut done = 0;
+    let mut temp_surface = Surface::new(
+        WINDOW_WIDTH as u32,
+        WINDOW_HEIGHT as u32,
+        PixelFormatEnum::Index8,
+    ).expect("Could not create display surface");
+    temp_surface
+        .set_palette(&Palette::with_colors(&COLORS).unwrap())
+        .expect("Could not set color palette");
+    let mut cycles = 0;
     let mut n: u64 = 0;
-    let mut last_interrupt = time::SystemTime::now();
-    let interrupt_delay = time::Duration::new(1, 0).checked_div(60).unwrap();
+    // let mut last_interrupt = time::SystemTime::now();
+    // let interrupt_delay = time::Duration::new(1, 0).checked_div(60).unwrap();
     let sdl_context = sdl2::init().unwrap();
     let video_subsystem = sdl_context.video().unwrap();
     let window = video_subsystem
@@ -74,12 +114,8 @@ fn main() {
         .position_centered()
         .build()
         .unwrap();
-    let mut canvas = window.into_canvas().build().unwrap();
-    canvas.set_draw_color(Color::RGB(255, 255, 255));
-    canvas.clear();
-    canvas.present();
     let mut event_pump = sdl_context.event_pump().unwrap();
-    while done == 0 {
+    loop {
         for event in event_pump.poll_iter() {
             match event {
                 Event::Quit { .. }
@@ -95,19 +131,24 @@ fn main() {
         if emu.pc > 0x1FFF {
             panic!("Program counter out of game rom: {:04X}", emu.pc);
         }
-        if last_interrupt
-            .elapsed()
-            .unwrap_or_else(|_| time::Duration::new(0, 0))
-            > interrupt_delay
-        {
-            let display_buffer = &emu.memory[0x2400..(0x2400 + (WINDOW_WIDTH * WINDOW_HEIGHT) / 8)];
-            display_window(display_buffer, &mut canvas);
-            canvas.present();
+        // if last_interrupt
+        //     .elapsed()
+        //     .unwrap_or_else(|_| time::Duration::new(0, 0))
+        //     > interrupt_delay
+        if cycles > 1666 {
+            cycles %= 1666;
+            let mut window_surface = window.surface(&event_pump).unwrap();
+            let display_buffer = &emu.memory[0x2400..][..((WINDOW_WIDTH * WINDOW_HEIGHT) / 8)];
+            display_window(display_buffer, &mut temp_surface);
+            temp_surface
+                .blit_scaled(None, &mut window_surface, None)
+                .unwrap();
+            window_surface.finish().unwrap();
             emu.generate_interrupt(2);
-            last_interrupt = time::SystemTime::now();
+            // last_interrupt = time::SystemTime::now();
         }
         print!("#{} ", n);
         n += 1;
-        done = emu.step_dis();
+        cycles += emu.step_dis();
     }
 }
