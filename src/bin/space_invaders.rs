@@ -5,7 +5,7 @@ use sdl2::{
     pixels::{Color, Palette, PixelFormatEnum},
     surface::Surface,
 };
-use std::{env::args, time};
+use std::env::args;
 
 const COLORS: [Color; 4] = [
     Color {
@@ -76,8 +76,15 @@ fn display_window(display_buffer: &[u8], surface: &mut Surface) {
             let pixels = display_buffer[x * WINDOW_HEIGHT / 8 + y];
             for i in 0..8 {
                 let line = WINDOW_HEIGHT - y * 8 - i - 1;
+                let color = if line < 50 {
+                    3
+                } else if line > 180 && line < 230 {
+                    2
+                } else {
+                    1
+                };
                 if pixels & (1 << i) > 0 {
-                    dest_pixels[line * pitch + x] = 1;
+                    dest_pixels[line * pitch + x] = color;
                 } else {
                     dest_pixels[line * pitch + x] = 0;
                 }
@@ -115,6 +122,7 @@ fn main() {
         .build()
         .unwrap();
     let mut event_pump = sdl_context.event_pump().unwrap();
+    let mut next_interrupt = 1;
     loop {
         for event in event_pump.poll_iter() {
             match event {
@@ -137,15 +145,18 @@ fn main() {
         //     > interrupt_delay
         if cycles > 1666 {
             cycles %= 1666;
-            let mut window_surface = window.surface(&event_pump).unwrap();
-            let display_buffer = &emu.memory[0x2400..][..((WINDOW_WIDTH * WINDOW_HEIGHT) / 8)];
-            display_window(display_buffer, &mut temp_surface);
-            temp_surface
-                .blit_scaled(None, &mut window_surface, None)
-                .unwrap();
-            window_surface.finish().unwrap();
-            emu.generate_interrupt(2);
-            // last_interrupt = time::SystemTime::now();
+            if emu.int_enable {
+                let mut window_surface = window.surface(&event_pump).unwrap();
+                let display_buffer = &emu.memory[0x2400..][..((WINDOW_WIDTH * WINDOW_HEIGHT) / 8)];
+                display_window(display_buffer, &mut temp_surface);
+                temp_surface
+                    .blit_scaled(None, &mut window_surface, None)
+                    .unwrap();
+                window_surface.finish().unwrap();
+                emu.generate_interrupt(next_interrupt);
+                next_interrupt = if next_interrupt == 1 { 2 } else { 1 };
+                // last_interrupt = time::SystemTime::now();
+            }
         }
         print!("#{} ", n);
         n += 1;
