@@ -26,7 +26,7 @@ impl InOutHandler for DefaultHandler {
 #[derive(Default)]
 pub struct Emu8080<T: InOutHandler = DefaultHandler> {
     pub state: State8080,
-    io: T,
+    pub io: T,
 }
 
 impl<T: InOutHandler> Deref for Emu8080<T> {
@@ -104,12 +104,10 @@ impl<T: InOutHandler> Emu8080<T> {
     }
 
     fn adc(&mut self, val: u8) {
-        let mut cy = if self.fl.cy { 1u8 } else { 0u8 };
-        self.add(val);
-        if self.fl.cy {
-            cy += 1
-        };
-        self.add(cy);
+        let cy = if self.fl.cy { 1 } else { 0 };
+        let ans = u16::from(self.a) + u16::from(val) + cy;
+        self.a = ans as u8;
+        self.set_flags(ans);
     }
 
     fn sub(&mut self, val: u8) {
@@ -127,19 +125,19 @@ impl<T: InOutHandler> Emu8080<T> {
     fn and(&mut self, val: u8) {
         self.a &= val;
         let temp = self.a;
-        self.set_r(temp);
+        self.set_flags(temp.into());
     }
 
     fn xor(&mut self, val: u8) {
         self.a ^= val;
         let temp = self.a;
-        self.set_r(temp);
+        self.set_flags(temp.into());
     }
 
     fn or(&mut self, val: u8) {
         self.a |= val;
         let temp = self.a;
-        self.set_r(temp);
+        self.set_flags(temp.into());
     }
 
     fn cmp(&mut self, val: u8) {
@@ -505,7 +503,11 @@ impl<T: InOutHandler> Emu8080<T> {
     fn flagop(&mut self, op: u8) -> usize {
         match (op >> 3) & 3 {
             0 => {}                        // DAA
-            1 => self.a = !self.a,         // CMA
+            1 => {
+                self.a = !self.a;
+                let a = self.a;
+                self.set_r(a);
+            } // CMA
             2 => self.fl.cy = true,        // STC
             3 => self.fl.cy = !self.fl.cy, // CMC
             _ => unreachable!(),

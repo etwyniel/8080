@@ -4,6 +4,7 @@ use sdl2::{
     keyboard::Keycode,
     pixels::{Color, Palette, PixelFormatEnum},
     surface::Surface,
+    video::Window,
 };
 use std::env::args;
 
@@ -34,17 +35,73 @@ const COLORS: [Color; 4] = [
     },
 ];
 
+#[repr(u8)]
+enum Port1Buttons {
+    Credit = 0b0000_0001,
+    Player2Start = 0b0000_0010,
+    Player1Start = 0b0000_0100,
+    Player1Shoot = 0b0001_0000,
+    Player1Left = 0b0010_0000,
+    Player1Right = 0b0100_0000,
+}
+
+#[repr(u8)]
+enum  Port2Buttons {
+    Tilt = 0b0000_0100,
+    Player2Shoot = 0b0001_0000,
+    Player2Left = 0b0010_0000,
+    Player2Right = 0b0100_0000,
+}
+
+fn handle_buttons(io: &mut SpaceInvadersInOut, key: Keycode, down: bool) {
+    {
+        use Port1Buttons::*;
+        let port1_mask = match key {
+            Keycode::C => Credit as u8,
+            Keycode::P => Player2Start as u8,
+            Keycode::Return => Player1Start as u8,
+            Keycode::Left => Player1Left as u8,
+            Keycode::Right => Player1Right as u8,
+            Keycode::Up => Player1Shoot as u8,
+            _ => 0,
+        };
+        if down {
+            io.port1 |= port1_mask;
+        } else {
+            io.port1 &= !port1_mask;
+        }
+    }
+    {
+        use Port2Buttons::*;
+        let port2_mask = match key {
+            Keycode::V => Player2Left as u8,
+            Keycode::B => Player2Right as u8,
+            Keycode::Space => Player2Shoot as u8,
+            Keycode::T => Tilt as u8,
+            _ => 0,
+        };
+        if down {
+            io.port2 |= port2_mask;
+        } else {
+            io.port2 &= !port2_mask;
+        }
+    }
+}
+
 #[derive(Default)]
 struct SpaceInvadersInOut {
     offset: u8,
     xy: u16,
+    port1: u8,
+    port2: u8,
 }
 
 impl InOutHandler for SpaceInvadersInOut {
     fn read(&mut self, port: u8) -> u8 {
         match port {
             0 => 14,
-            1 => 9,
+            1 => self.port1,
+            2 => self.port2,
             3 => ((self.xy >> (8 - self.offset)) & 0xff) as u8,
             _ => 0,
         }
@@ -57,6 +114,25 @@ impl InOutHandler for SpaceInvadersInOut {
             }
             2 => {
                 self.offset = val & 0x7;
+            }
+            6 => {
+                // Debug port
+                // let c = match val {
+                //     0..=25 => (val + b'a') as char,
+                //     26..=35 => (val - 26 + b'0') as char,
+                //     36 => '<',
+                //     37 => '>',
+                //     38 => ' ',
+                //     39 => '=',
+                //     40 => '*',
+                //     41 => 'λ',
+                //     63 => '-',
+                //     146 => {
+                //         return;
+                //     }
+                //     _ => '?',
+                // };
+                // eprintln!("Wrote to debug: 0x{:02x} ({})", val, c);
             }
             _ => {}
         }
@@ -93,6 +169,48 @@ fn display_window(display_buffer: &[u8], surface: &mut Surface) {
     }
 }
 
+fn init_surfaces() -> (Surface<'static>, Surface<'static>) {
+    let game_surface = Surface::new(
+        WINDOW_WIDTH as u32,
+        WINDOW_HEIGHT as u32,
+        PixelFormatEnum::Index8,
+    ).expect("Could not create display surface");
+    let temp_surface = Surface::new(
+        WINDOW_WIDTH as u32,
+        WINDOW_HEIGHT as u32,
+        PixelFormatEnum::RGB888,
+    ).expect("Could not create display surface");
+    (game_surface, temp_surface)
+}
+
+fn init_window(video_subsystem: &sdl2::VideoSubsystem) -> Window {
+    video_subsystem
+        .window(
+            "Space Invaders",
+            (WINDOW_WIDTH * 2) as u32,
+            (WINDOW_HEIGHT * 2) as u32,
+        ).position_centered()
+        .resizable()
+        .build()
+        .unwrap()
+}
+
+fn update_display(
+    event_pump: &sdl2::EventPump,
+    window: &Window,
+    &mut (ref mut game_surface, ref mut temp_surface): &mut (Surface<'static>, Surface<'static>),
+    emu: &Emu8080<SpaceInvadersInOut>,
+) {
+    let mut window_surface = window.surface(&event_pump).unwrap();
+    let display_buffer = &emu.memory[0x2400..][..((WINDOW_WIDTH * WINDOW_HEIGHT) / 8)];
+    display_window(display_buffer, game_surface);
+    game_surface.blit(None, temp_surface, None).unwrap();
+    temp_surface
+        .blit_scaled(None, &mut window_surface, None)
+        .unwrap();
+    window_surface.finish().unwrap();
+}
+
 fn main() {
     let mut emu = Emu8080::<SpaceInvadersInOut>::default();
     if let Some(filename) = args().nth(1) {
@@ -102,25 +220,16 @@ fn main() {
         std::process::exit(1);
     }
 
-    let mut temp_surface = Surface::new(
-        WINDOW_WIDTH as u32,
-        WINDOW_HEIGHT as u32,
-        PixelFormatEnum::Index8,
-    ).expect("Could not create display surface");
-    temp_surface
+    let mut surfaces = init_surfaces();
+    surfaces
+        .0
         .set_palette(&Palette::with_colors(&COLORS).unwrap())
         .expect("Could not set color palette");
     let mut cycles = 0;
     let mut n: u64 = 0;
-    // let mut last_interrupt = time::SystemTime::now();
-    // let interrupt_delay = time::Duration::new(1, 0).checked_div(60).unwrap();
     let sdl_context = sdl2::init().unwrap();
     let video_subsystem = sdl_context.video().unwrap();
-    let window = video_subsystem
-        .window("Space Invaders", WINDOW_WIDTH as u32, WINDOW_HEIGHT as u32)
-        .position_centered()
-        .build()
-        .unwrap();
+    let window = init_window(&video_subsystem);
     let mut event_pump = sdl_context.event_pump().unwrap();
     let mut next_interrupt = 1;
     loop {
@@ -133,29 +242,27 @@ fn main() {
                 } => {
                     return;
                 }
+                Event::KeyDown {
+                    keycode: Some(keycode),
+                    ..
+                } => handle_buttons(&mut emu.io, keycode, true),
+                Event::KeyUp {
+                    keycode: Some(keycode),
+                    ..
+                } => handle_buttons(&mut emu.io, keycode, false),
                 _ => {}
             }
         }
         if emu.pc > 0x1FFF {
             panic!("Program counter out of game rom: {:04X}", emu.pc);
         }
-        // if last_interrupt
-        //     .elapsed()
-        //     .unwrap_or_else(|_| time::Duration::new(0, 0))
-        //     > interrupt_delay
+
         if cycles > 1666 {
             cycles %= 1666;
             if emu.int_enable {
-                let mut window_surface = window.surface(&event_pump).unwrap();
-                let display_buffer = &emu.memory[0x2400..][..((WINDOW_WIDTH * WINDOW_HEIGHT) / 8)];
-                display_window(display_buffer, &mut temp_surface);
-                temp_surface
-                    .blit_scaled(None, &mut window_surface, None)
-                    .unwrap();
-                window_surface.finish().unwrap();
+                update_display(&event_pump, &window, &mut surfaces, &emu);
                 emu.generate_interrupt(next_interrupt);
                 next_interrupt = if next_interrupt == 1 { 2 } else { 1 };
-                // last_interrupt = time::SystemTime::now();
             }
         }
         print!("#{} ", n);
