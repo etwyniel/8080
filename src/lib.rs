@@ -14,6 +14,7 @@ pub trait InOutHandler {
     fn write(&mut self, port: u8, val: u8);
 }
 
+#[derive(Default)]
 pub struct DefaultHandler;
 
 impl InOutHandler for DefaultHandler {
@@ -101,19 +102,18 @@ impl<T: InOutHandler> Emu8080<T> {
         let ans = u16::from(self.a) + u16::from(val);
         self.set_flags(ans);
         self.a = ans as u8;
+        self.fl.ac = (self.a & 0xf) + (val & 0xf) > 0xf;
     }
 
     fn adc(&mut self, val: u8) {
-        let cy = if self.fl.cy { 1 } else { 0 };
-        let ans = u16::from(self.a) + u16::from(val) + cy;
-        self.a = ans as u8;
-        self.set_flags(ans);
+        let cy = Wrapping(if self.fl.cy { 1 } else { 0 });
+        let Wrapping(rhs) = Wrapping(val) + cy;
+        self.add(rhs);
     }
 
     fn sub(&mut self, val: u8) {
-        let Wrapping(ans) = Wrapping(u16::from(self.a)) - Wrapping(u16::from(val));
-        self.set_flags(ans);
-        self.a = ans as u8;
+        let Wrapping(rhs) = Wrapping(!val) + Wrapping(1);
+        self.add(rhs);
     }
 
     fn sbb(&mut self, val: u8) {
@@ -254,17 +254,21 @@ impl<T: InOutHandler> Emu8080<T> {
 
     fn inr(&mut self, op: u8) -> usize {
         let reg = (op >> 3) & 7;
-        let Wrapping(val) = Wrapping(self.get_register(reg)) + Wrapping(1);
+        let lhs = self.get_register(reg);
+        let Wrapping(val) = Wrapping(lhs) + Wrapping(1);
         self.set_register(reg, val);
         self.set_r(val);
+        self.fl.ac = (lhs & 0xf) + 1 > 0xf;
         5
     }
 
     fn dcr(&mut self, op: u8) -> usize {
         let reg = (op >> 3) & 7;
-        let Wrapping(val) = Wrapping(self.get_register(reg)) - Wrapping(1);
+        let lhs = self.get_register(reg);
+        let Wrapping(val) = Wrapping(lhs) - Wrapping(1);
         self.set_register(reg, val);
         self.set_r(val);
+        self.fl.ac = (lhs & 0xf) + 1 > 0xf;
         5
     }
 
@@ -502,7 +506,14 @@ impl<T: InOutHandler> Emu8080<T> {
 
     fn flagop(&mut self, op: u8) -> usize {
         match (op >> 3) & 3 {
-            0 => {}                        // DAA
+            0 => {
+                if self.a & 0xf > 9 || self.fl.ac {
+                    self.add(0x06);
+                }
+                if ((self.a >> 4) & 0xf) > 9 || self.fl.cy {
+                    self.add(0x60);
+                }
+            }                        // DAA
             1 => {
                 self.a = !self.a;
                 let a = self.a;
@@ -654,5 +665,100 @@ impl<T: InOutHandler> Emu8080<T> {
         );
 
         res
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::default::Default;
+
+    fn setup() -> Emu8080<DefaultHandler> {
+        Default::default()
+    }
+
+    #[test]
+    fn add() {
+        let mut emu = setup();
+        emu.a = 10;
+        emu.add(25);
+        assert_eq!(emu.a, 35);
+        assert!(!emu.fl.cy);
+        assert!(!emu.fl.z);
+        assert!(!emu.fl.p);
+        assert!(!emu.fl.s);
+    }
+
+    #[test]
+    fn add_signed_overflow() {
+        let mut emu = setup();
+        emu.a = 120;
+        emu.add(10);
+        assert_eq!(emu.a, 130);
+        assert!(!emu.fl.cy);
+        assert!(!emu.fl.z);
+        assert!(emu.fl.p);
+        assert!(emu.fl.s);
+    }
+
+    #[test]
+    fn sub() {
+        let mut emu = setup();
+        emu.a = 30;
+        emu.sub(15);
+        assert_eq!(emu.a, 15);
+        assert!(emu.fl.cy);
+        assert!(!emu.fl.z);
+        assert!(emu.fl.p);
+        assert!(!emu.fl.s);
+    }
+
+    #[test]
+    fn sub_underflow() {
+        let mut emu = setup();
+        emu.a = 9;
+        emu.sub(20);
+        assert_eq!(emu.a, 245);
+        assert!(!emu.fl.cy);
+        assert!(!emu.fl.z);
+        assert!(emu.fl.p);
+        assert!(emu.fl.s);
+    }
+
+    #[test]
+    fn sub_to_zero() {
+        let mut emu = setup();
+        emu.a = 50;
+        emu.sub(50);
+        assert_eq!(emu.a, 0);
+        assert!(emu.fl.cy);
+        assert!(emu.fl.z);
+        assert!(emu.fl.p);
+        assert!(!emu.fl.s);
+    }
+
+    #[test]
+    fn adc_no_carry() {
+        let mut emu = setup();
+        emu.a = 0x3d;
+        emu.adc(0x42);
+        assert_eq!(emu.a, 0x7f);
+        assert!(!emu.fl.cy);
+        assert!(!emu.fl.z);
+        assert!(!emu.fl.p);
+        assert!(!emu.fl.s);
+    }
+
+    #[test]
+    fn adc_with_carry() {
+        let mut emu = setup();
+        emu.a = 0x3d;
+        emu.fl.cy = true;
+        emu.adc(0x42);
+        assert_eq!(emu.a, 0x80);
+        assert!(!emu.fl.cy);
+        assert!(!emu.fl.z);
+        assert!(!emu.fl.p);
+        assert!(emu.fl.s);
     }
 }

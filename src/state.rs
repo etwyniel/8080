@@ -19,8 +19,8 @@ impl Flags {
     }
 }
 
-fn parity(mut x: u8, cy: bool) -> bool {
-    let mut p = if cy { 1 } else { 0 };
+fn parity(mut x: u8) -> bool {
+    let mut p = 0;
     for _ in 0..8 {
         if x & 1 != 0 {
             p += 1
@@ -32,7 +32,7 @@ fn parity(mut x: u8, cy: bool) -> bool {
 
 #[test]
 fn parity_test() {
-    assert!(!parity(0x99, true));
+    assert!(parity(0x99));
 }
 
 pub struct State8080 {
@@ -191,7 +191,7 @@ impl State8080 {
     pub fn set_r(&mut self, res: u8) {
         self.fl.z = res == 0;
         self.fl.s = (res & 0x80) != 0;
-        self.fl.p = parity(res, self.fl.cy);
+        self.fl.p = parity(res);
     }
 
     pub fn set_flags(&mut self, res: u16) {
