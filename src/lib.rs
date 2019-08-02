@@ -99,10 +99,10 @@ impl<T: InOutHandler> Emu8080<T> {
     }
 
     fn add(&mut self, val: u8) {
+        self.fl.ac = (self.a & 0xf) + (val & 0xf) > 0xf;
         let ans = u16::from(self.a) + u16::from(val);
         self.set_flags(ans);
         self.a = ans as u8;
-        self.fl.ac = (self.a & 0xf) + (val & 0xf) > 0xf;
     }
 
     fn adc(&mut self, val: u8) {
@@ -255,20 +255,20 @@ impl<T: InOutHandler> Emu8080<T> {
     fn inr(&mut self, op: u8) -> usize {
         let reg = (op >> 3) & 7;
         let lhs = self.get_register(reg);
+        self.fl.ac = (lhs & 0xf) + 1 > 0xf;
         let Wrapping(val) = Wrapping(lhs) + Wrapping(1);
         self.set_register(reg, val);
         self.set_r(val);
-        self.fl.ac = (lhs & 0xf) + 1 > 0xf;
         5
     }
 
     fn dcr(&mut self, op: u8) -> usize {
         let reg = (op >> 3) & 7;
         let lhs = self.get_register(reg);
+        self.fl.ac = (lhs & 0xf) + 1 > 0xf;
         let Wrapping(val) = Wrapping(lhs) - Wrapping(1);
         self.set_register(reg, val);
         self.set_r(val);
-        self.fl.ac = (lhs & 0xf) + 1 > 0xf;
         5
     }
 
@@ -760,5 +760,6 @@ mod tests {
         assert!(!emu.fl.z);
         assert!(!emu.fl.p);
         assert!(emu.fl.s);
+        assert!(emu.fl.ac);
     }
 }
