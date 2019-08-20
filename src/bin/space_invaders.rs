@@ -213,7 +213,16 @@ fn update_display(
 
 fn main() {
     let mut emu = Emu8080::<SpaceInvadersInOut>::default();
-    if let Some(filename) = args().nth(1) {
+    let mut filename = None;
+    let mut disassemble = false;
+    for arg in args().skip(1) {
+        if arg == "-d" || arg == "--disassemble" {
+            disassemble = true;
+        } else {
+            filename = filename.or(Some(arg));
+        }
+    }
+    if let Some(filename) = filename {
         emu.read_file_in_memory_at(&filename, 0).unwrap();
     } else {
         eprintln!("Usage: {} rom", args().next().unwrap());
@@ -265,8 +274,14 @@ fn main() {
                 next_interrupt = if next_interrupt == 1 { 2 } else { 1 };
             }
         }
-        print!("#{} ", n);
+        if disassemble {
+            print!("#{} ", n);
+        }
         n += 1;
-        cycles += emu.step_dis();
+        cycles += if disassemble {
+            emu.step_dis()
+        } else {
+            emu.step()
+        };
     }
 }
