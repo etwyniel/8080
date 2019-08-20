@@ -3,6 +3,7 @@ name = "emulator"
 version = "0.1.0"
 authors = ["Aymeric Beringer <aymeric.beringer@epita.fr>"]
 edition = "2018"
+default-run = "space_invaders"
 
 [dependencies]
 sdl2 = "0.32.1"
