@@ -266,8 +266,8 @@ fn main() {
             panic!("Program counter out of game rom: {:04X}", emu.pc);
         }
 
-        if cycles > 1666 {
-            cycles %= 1666;
+        if cycles > 16666 {
+            cycles -= 16667;
             if emu.int_enable {
                 update_display(&event_pump, &window, &mut surfaces, &emu);
                 emu.generate_interrupt(next_interrupt);

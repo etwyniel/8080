@@ -497,7 +497,7 @@ impl<T: InOutHandler> Emu8080<T> {
                 // RAR
                 let prev_carry = if self.fl.cy { 1 } else { 0 };
                 self.fl.cy = (self.a & 1) == 1;
-                self.a = (self.a >> 1) | prev_carry;
+                self.a = (self.a >> 1) | (prev_carry << 7);
             }
             _ => panic!("Invalid rotation operation"),
         };
@@ -516,8 +516,6 @@ impl<T: InOutHandler> Emu8080<T> {
             }                        // DAA
             1 => {
                 self.a = !self.a;
-                let a = self.a;
-                self.set_r(a);
             } // CMA
             2 => self.fl.cy = true,        // STC
             3 => self.fl.cy = !self.fl.cy, // CMC
